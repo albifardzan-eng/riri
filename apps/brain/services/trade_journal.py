@@ -34,6 +34,12 @@ class TradeJournal:
             )
         )
 
+    def write(
+        self,
+        trade
+    ):
+        self.add(trade)
+
     def all(self):
 
         return json.loads(
