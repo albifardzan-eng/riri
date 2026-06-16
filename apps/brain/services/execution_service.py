@@ -1,9 +1,20 @@
-from models.execution_result import (
+import uuid
+
+from models.execution import (
     ExecutionResult
 )
 
+from models.execution_signal import (
+    ExecutionSignal
+)
+
+from services.signal_store import (
+    signal_store
+)
+
 from config.trading_config import (
-    DEFAULT_LOT
+    TP_POINTS,
+    SL_POINTS
 )
 
 
@@ -13,7 +24,7 @@ class ExecutionService:
         self,
         decision,
         risk
-    ) -> ExecutionResult:
+    ):
 
         if decision is None:
 
@@ -22,15 +33,6 @@ class ExecutionService:
                 order_type="NONE",
                 lot=0.0,
                 reason="NO_DECISION"
-            )
-
-        if risk is None:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="NO_RISK"
             )
 
         if not risk.approved:
@@ -42,18 +44,39 @@ class ExecutionService:
                 reason="RISK_REJECTED"
             )
 
-        if decision.decision == "NONE":
+        signal = ExecutionSignal(
 
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="NO_SIGNAL"
-            )
+            signal_id=
+            str(uuid.uuid4()),
+
+            symbol="XAUUSD",
+
+            action=
+            decision.decision,
+
+            lot=0.01,
+
+            tp_points=
+            TP_POINTS,
+
+            sl_points=
+            SL_POINTS,
+
+            status="PENDING"
+        )
+
+        signal_store.set_signal(
+            signal
+        )
 
         return ExecutionResult(
             executed=True,
-            order_type=decision.decision,
-            lot=DEFAULT_LOT,
-            reason="READY_FOR_MT5"
+
+            order_type=
+            decision.decision,
+
+            lot=0.01,
+
+            reason=
+            "SIGNAL_CREATED"
         )

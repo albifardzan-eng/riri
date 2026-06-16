@@ -21,6 +21,10 @@ from research.statistics_service import StatisticsService
 from research.fundamental_service import FundamentalService
 from research.pattern_service import PatternService
 
+from services.signal_store import (
+    signal_store
+)
+
 router = APIRouter()
 
 scoring_engine = ScoringEngine()
@@ -400,3 +404,31 @@ async def journal_history():
     return trade_journal.latest(
         limit=100
     )
+
+@router.get(
+    "/execution/pending"
+)
+async def execution_pending():
+
+    signal = (
+        signal_store.get_signal()
+    )
+
+    if signal is None:
+
+        return {
+            "signal": None
+        }
+
+    return signal
+
+@router.post(
+    "/execution/confirm"
+)
+async def execution_confirm():
+
+    signal_store.clear()
+
+    return {
+        "success": True
+    }
