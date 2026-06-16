@@ -13,6 +13,10 @@ class MarketStore:
         self.latest_decision = None
         self.latest_risk = None
 
+        self.latest_execution = None
+
+        self.latest_journal = None
+
     # Market
 
     def update(self, data):
@@ -68,6 +72,22 @@ class MarketStore:
 
     def get_risk(self):
         return self.latest_risk
+
+    # Execution
+
+    def update_execution(self, data):
+        self.latest_execution = data
+
+    def get_execution(self):
+        return self.latest_execution
+
+    # Journal
+
+    def update_journal(self, data):
+        self.latest_journal = data
+
+    def get_journal(self):
+        return self.latest_journal
 
 
 market_store = MarketStore()

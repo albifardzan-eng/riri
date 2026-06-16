@@ -1,26 +1,35 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import {
+  useEffect,
+  useState
+} from "react"
 
 export function useMarketWS() {
 
-  const [market, setMarket] =
-    useState<any>(null)
+  const [
+    payload,
+    setPayload
+  ] = useState<any>(null)
 
   useEffect(() => {
 
-    const ws = new WebSocket(
-      process.env.NEXT_PUBLIC_WS_URL ||
-      "ws://localhost:8000/ws"
-    )
+    const ws =
+      new WebSocket(
+        process.env
+          .NEXT_PUBLIC_WS_URL ||
+        "ws://localhost:8000/ws"
+      )
 
-    ws.onmessage = (event) => {
+    ws.onmessage =
+      (event) => {
 
-      const data =
-        JSON.parse(event.data)
-
-      setMarket(data)
-    }
+        setPayload(
+          JSON.parse(
+            event.data
+          )
+        )
+      }
 
     return () => {
       ws.close()
@@ -28,5 +37,5 @@ export function useMarketWS() {
 
   }, [])
 
-  return market
+  return payload
 }
