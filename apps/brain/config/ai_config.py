@@ -1,0 +1,3 @@
+MODEL_NAME = "gpt-5-mini"
+
+MAX_TOKENS = 200
