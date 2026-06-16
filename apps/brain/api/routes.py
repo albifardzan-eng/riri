@@ -25,6 +25,10 @@ from services.signal_store import (
     signal_store
 )
 
+from services.trade_journal import (
+    trade_journal
+)
+
 router = APIRouter()
 
 scoring_engine = ScoringEngine()
@@ -425,10 +429,23 @@ async def execution_pending():
 @router.post(
     "/execution/confirm"
 )
-async def execution_confirm():
+async def execution_confirm(
+    payload: dict
+):
+
+    trade_journal.add(
+        payload
+    )
 
     signal_store.clear()
 
     return {
         "success": True
     }
+
+@router.get(
+    "/journal"
+)
+async def journal():
+
+    return trade_journal.all()

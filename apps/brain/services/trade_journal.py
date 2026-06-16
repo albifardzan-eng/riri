@@ -1,72 +1,44 @@
-import json
 from pathlib import Path
 from datetime import datetime
+import json
 
 
 class TradeJournal:
 
     def __init__(self):
 
-        self.file_path = Path(
-            "trade_journal.jsonl"
+        self.path = Path(
+            "trade_journal.json"
         )
 
-    def write(
-        self,
-        payload: dict
-    ):
+        if not self.path.exists():
 
-        record = {
-            "timestamp":
-            datetime.utcnow().isoformat(),
+            self.path.write_text("[]")
 
-            **payload
-        }
+    def add(self, trade):
 
-        with open(
-            self.file_path,
-            "a",
-            encoding="utf-8"
-        ) as f:
+        trades = json.loads(
+            self.path.read_text()
+        )
 
-            f.write(
-                json.dumps(
-                    record,
-                    default=str
-                )
+        trade["timestamp"] = (
+            datetime.utcnow().isoformat()
+        )
+
+        trades.append(trade)
+
+        self.path.write_text(
+            json.dumps(
+                trades,
+                indent=2
             )
+        )
 
-            f.write("\n")
+    def all(self):
 
-    def latest(
-        self,
-        limit: int = 50
-    ):
-
-        if not self.file_path.exists():
-            return []
-
-        with open(
-            self.file_path,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            lines = f.readlines()
-
-        rows = []
-
-        for line in lines[-limit:]:
-
-            try:
-                rows.append(
-                    json.loads(line)
-                )
-
-            except Exception:
-                pass
-
-        return rows
+        return json.loads(
+            self.path.read_text()
+        )
 
 
 trade_journal = TradeJournal()

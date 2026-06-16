@@ -15,4 +15,6 @@ class ExecutionSignal(BaseModel):
 
     sl_points: int
 
+    confidence: int
+
     status: str
