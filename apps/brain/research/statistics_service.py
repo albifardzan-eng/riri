@@ -3,15 +3,23 @@ import pandas as pd
 
 class StatisticsService:
 
-    def analyze(self, market):
+    def analyze(
+        self,
+        market
+    ):
 
-        if len(market.candles) < 100:
+        if (
+            market is None
+            or len(market.candles) < 100
+        ):
             return None
 
-        df = pd.DataFrame([
-            c.model_dump()
-            for c in market.candles
-        ])
+        df = pd.DataFrame(
+            [
+                candle.model_dump()
+                for candle in market.candles
+            ]
+        )
 
         closes = df["close"]
 
@@ -27,11 +35,19 @@ class StatisticsService:
 
         atr_percentile = min(
             100,
-            int(market.atr * 20)
+            max(
+                0,
+                int(market.atr * 20)
+            )
         )
 
         ema5 = closes.ewm(
             span=5,
+            adjust=False
+        ).mean().iloc[-1]
+
+        ema10 = closes.ewm(
+            span=10,
             adjust=False
         ).mean().iloc[-1]
 
@@ -60,10 +76,61 @@ class StatisticsService:
             )
         )
 
+        momentum = (
+            closes.iloc[-1]
+            - closes.iloc[-5]
+        )
+
         return {
-            "daily_range": round(daily_range, 2),
-            "session_range": round(session_range, 2),
+
+            "daily_range": round(
+                daily_range,
+                2
+            ),
+
+            "session_range": round(
+                session_range,
+                2
+            ),
+
             "atr_percentile": atr_percentile,
+
             "trend_strength": trend_strength,
-            "volatility_percentile": volatility_percentile
+
+            "volatility_percentile": volatility_percentile,
+
+            "ema5": round(
+                ema5,
+                2
+            ),
+
+            "ema10": round(
+                ema10,
+                2
+            ),
+
+            "ema100": round(
+                ema100,
+                2
+            ),
+
+            "trend": (
+                "BULLISH"
+                if ema5 > ema10 > ema100
+                else
+                "BEARISH"
+                if ema5 < ema10 < ema100
+                else
+                "SIDEWAYS"
+            ),
+
+            "momentum": round(
+                momentum,
+                2
+            ),
+
+            "last_close": round(
+                closes.iloc[-1],
+                2
+            )
         }

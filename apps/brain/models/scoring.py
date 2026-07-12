@@ -1,13 +1,42 @@
 from pydantic import BaseModel
+from pydantic import Field
 
 
 class ScoringResult(BaseModel):
-    score: int
+
+    score: int = Field(
+        ge=0,
+        le=100
+    )
+
     qualified: bool
 
-    trend_score: int
-    momentum_score: int
-    volume_score: int
-    volatility_score: int
-    session_score: int
-    spread_score: int
+    trend_score: int = Field(
+        ge=0,
+        le=20
+    )
+
+    momentum_score: int = Field(
+        ge=0,
+        le=15
+    )
+
+    volume_score: int = Field(
+        ge=0,
+        le=20
+    )
+
+    volatility_score: int = Field(
+        ge=0,
+        le=15
+    )
+
+    session_score: int = Field(
+        ge=0,
+        le=15
+    )
+
+    spread_score: int = Field(
+        ge=0,
+        le=15
+    )

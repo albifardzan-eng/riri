@@ -2,7 +2,9 @@ import uuid
 
 from config.trading_config import (
     TP_POINTS,
-    SL_POINTS
+    SL_POINTS,
+    DEFAULT_LOT,
+    MAX_TOTAL_LOT
 )
 
 from models.execution import (
@@ -62,14 +64,46 @@ class ExecutionService:
                 reason="RISK_REJECTED"
             )
 
+        confidence = max(
+            0,
+            min(
+                100,
+                decision.confidence
+            )
+        )
+
+        lot = DEFAULT_LOT
+
+        if confidence >= 95:
+            lot = min(0.05, MAX_TOTAL_LOT)
+
+        elif confidence >= 90:
+            lot = min(0.04, MAX_TOTAL_LOT)
+
+        elif confidence >= 85:
+            lot = min(0.03, MAX_TOTAL_LOT)
+
+        elif confidence >= 80:
+            lot = min(0.02, MAX_TOTAL_LOT)
+
         signal = ExecutionSignal(
-            signal_id=str(uuid.uuid4()),
+
+            signal_id=str(
+                uuid.uuid4()
+            ),
+
             symbol="XAUUSD",
+
             action=decision.decision,
-            lot=0.01,
+
+            lot=lot,
+
             tp_points=TP_POINTS,
+
             sl_points=SL_POINTS,
-            confidence=decision.confidence,
+
+            confidence=confidence,
+
             status="PENDING"
         )
 
@@ -78,8 +112,12 @@ class ExecutionService:
         )
 
         return ExecutionResult(
+
             executed=True,
+
             order_type=decision.decision,
-            lot=0.01,
+
+            lot=lot,
+
             reason="SIGNAL_CREATED"
         )
