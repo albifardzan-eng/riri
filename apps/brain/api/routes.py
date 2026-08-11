@@ -8,6 +8,7 @@ from config.settings import settings
 from services.market_store import market_store
 from services.execution_service import ExecutionService
 from services.trade_journal import trade_journal
+from services.signal_store import signal_store
 
 from scoring.scoring_engine import ScoringEngine
 
@@ -21,13 +22,6 @@ from research.statistics_service import StatisticsService
 from research.fundamental_service import FundamentalService
 from research.pattern_service import PatternService
 
-from services.signal_store import (
-    signal_store
-)
-
-from services.trade_journal import (
-    trade_journal
-)
 
 router = APIRouter()
 
@@ -43,12 +37,21 @@ ai_risk = AIRisk()
 execution_service = ExecutionService()
 
 
+# ==================================================
+# HEALTH
+# ==================================================
+
 @router.get("/health")
 async def health():
+
     return {
         "status": "healthy"
     }
 
+
+# ==================================================
+# STATUS
+# ==================================================
 
 @router.get(
     "/status",
@@ -63,24 +66,52 @@ async def status():
     )
 
 
+# ==================================================
+# RECEIVE MARKET DATA
+# ==================================================
+
 @router.post("/mt5/market")
 async def receive_market_data(
     data: MarketData
 ):
 
+    # --------------------------------------------------
+    # MARKET
+    # --------------------------------------------------
+
     market_store.update(data)
 
-    score = scoring_engine.calculate(data)
+    # --------------------------------------------------
+    # SCORING
+    # --------------------------------------------------
 
-    market_store.update_score(score)
+    score = scoring_engine.calculate(
+        data
+    )
 
-    statistics = statistics_service.analyze(data)
+    market_store.update_score(
+        score
+    )
+
+    # --------------------------------------------------
+    # RESEARCH
+    # --------------------------------------------------
+
+    statistics = (
+        statistics_service.analyze(
+            data
+        )
+    )
 
     fundamental = (
         await fundamental_service.analyze()
     )
 
-    pattern = pattern_service.analyze(data)
+    pattern = (
+        pattern_service.analyze(
+            data
+        )
+    )
 
     market_store.update_statistics(
         statistics
@@ -94,11 +125,23 @@ async def receive_market_data(
         pattern
     )
 
+    # --------------------------------------------------
+    # DEFAULT RESULT
+    # --------------------------------------------------
+
     decision = None
     risk = None
     execution = None
 
+    # --------------------------------------------------
+    # AI PIPELINE
+    # --------------------------------------------------
+
     if score.qualified:
+
+        # ----------------------------------------------
+        # AI TRADER
+        # ----------------------------------------------
 
         decision = (
             await ai_trader.decide(
@@ -120,14 +163,24 @@ async def receive_market_data(
             decision
         )
 
-        risk = await ai_risk.evaluate(
-            market=data,
-            trader_decision=decision
+        # ----------------------------------------------
+        # AI RISK
+        # ----------------------------------------------
+
+        risk = (
+            await ai_risk.evaluate(
+                market=data,
+                trader_decision=decision
+            )
         )
 
         market_store.update_risk(
             risk
         )
+
+        # ----------------------------------------------
+        # EXECUTION
+        # ----------------------------------------------
 
         execution = (
             await execution_service.execute(
@@ -140,37 +193,34 @@ async def receive_market_data(
             execution
         )
 
+        # ----------------------------------------------
+        # JOURNAL
+        # ----------------------------------------------
+
         journal_record = {
             "symbol": data.symbol,
 
-            "score":
-            score.model_dump(),
+            "score": score.model_dump(),
 
-            "statistics":
-            statistics,
+            "statistics": statistics,
 
-            "fundamental":
-            fundamental,
+            "fundamental": fundamental,
 
-            "pattern":
-            pattern,
+            "pattern": pattern,
 
-            "decision":
-            (
+            "decision": (
                 decision.model_dump()
                 if decision
                 else None
             ),
 
-            "risk":
-            (
+            "risk": (
                 risk.model_dump()
                 if risk
                 else None
             ),
 
-            "execution":
-            (
+            "execution": (
                 execution.model_dump()
                 if execution
                 else None
@@ -185,41 +235,37 @@ async def receive_market_data(
             journal_record
         )
 
+    # --------------------------------------------------
+    # WEBSOCKET
+    # --------------------------------------------------
+
     await manager.broadcast(
         {
             "type": "market_update",
 
-            "market":
-            data.model_dump(),
+            "market": data.model_dump(),
 
-            "score":
-            score.model_dump(),
+            "score": score.model_dump(),
 
-            "statistics":
-            statistics,
+            "statistics": statistics,
 
-            "fundamental":
-            fundamental,
+            "fundamental": fundamental,
 
-            "pattern":
-            pattern,
+            "pattern": pattern,
 
-            "decision":
-            (
+            "decision": (
                 decision.model_dump()
                 if decision
                 else None
             ),
 
-            "risk":
-            (
+            "risk": (
                 risk.model_dump()
                 if risk
                 else None
             ),
 
-            "execution":
-            (
+            "execution": (
                 execution.model_dump()
                 if execution
                 else None
@@ -227,36 +273,39 @@ async def receive_market_data(
         }
     )
 
+    # --------------------------------------------------
+    # LOG
+    # --------------------------------------------------
+
     logger.info(
         f"Score={score.score} "
         f"Qualified={score.qualified}"
     )
 
+    # --------------------------------------------------
+    # RESPONSE
+    # --------------------------------------------------
+
     return {
         "success": True,
 
-        "score":
-        score.score,
+        "score": score.score,
 
-        "qualified":
-        score.qualified,
+        "qualified": score.qualified,
 
-        "decision":
-        (
+        "decision": (
             decision.model_dump()
             if decision
             else None
         ),
 
-        "risk":
-        (
+        "risk": (
             risk.model_dump()
             if risk
             else None
         ),
 
-        "execution":
-        (
+        "execution": (
             execution.model_dump()
             if execution
             else None
@@ -264,19 +313,27 @@ async def receive_market_data(
     }
 
 
+# ==================================================
+# LATEST MARKET
+# ==================================================
+
 @router.get("/mt5/latest")
 async def latest_market():
 
     market = market_store.get()
 
     if market is None:
+
         return {
-            "message":
-            "No market data available"
+            "message": "No market data available"
         }
 
     return market
 
+
+# ==================================================
+# LATEST SCORE
+# ==================================================
 
 @router.get("/score/latest")
 async def latest_score():
@@ -284,13 +341,17 @@ async def latest_score():
     score = market_store.get_score()
 
     if score is None:
+
         return {
-            "message":
-            "No score available"
+            "message": "No score available"
         }
 
     return score
 
+
+# ==================================================
+# LATEST STATISTICS
+# ==================================================
 
 @router.get("/research/statistics")
 async def latest_statistics():
@@ -300,13 +361,17 @@ async def latest_statistics():
     )
 
     if statistics is None:
+
         return {
-            "message":
-            "No statistics available"
+            "message": "No statistics available"
         }
 
     return statistics
 
+
+# ==================================================
+# LATEST FUNDAMENTAL
+# ==================================================
 
 @router.get("/research/fundamental")
 async def latest_fundamental():
@@ -316,13 +381,17 @@ async def latest_fundamental():
     )
 
     if fundamental is None:
+
         return {
-            "message":
-            "No fundamental data available"
+            "message": "No fundamental data available"
         }
 
     return fundamental
 
+
+# ==================================================
+# LATEST PATTERN
+# ==================================================
 
 @router.get("/research/pattern")
 async def latest_pattern():
@@ -332,13 +401,17 @@ async def latest_pattern():
     )
 
     if pattern is None:
+
         return {
-            "message":
-            "No pattern data available"
+            "message": "No pattern data available"
         }
 
     return pattern
 
+
+# ==================================================
+# LATEST TRADER DECISION
+# ==================================================
 
 @router.get("/trader/latest")
 async def latest_decision():
@@ -348,13 +421,17 @@ async def latest_decision():
     )
 
     if decision is None:
+
         return {
-            "message":
-            "No decision available"
+            "message": "No decision available"
         }
 
     return decision
 
+
+# ==================================================
+# LATEST RISK
+# ==================================================
 
 @router.get("/risk/latest")
 async def latest_risk():
@@ -362,13 +439,17 @@ async def latest_risk():
     risk = market_store.get_risk()
 
     if risk is None:
+
         return {
-            "message":
-            "No risk available"
+            "message": "No risk available"
         }
 
     return risk
 
+
+# ==================================================
+# LATEST EXECUTION
+# ==================================================
 
 @router.get("/execution/latest")
 async def latest_execution():
@@ -378,13 +459,17 @@ async def latest_execution():
     )
 
     if execution is None:
+
         return {
-            "message":
-            "No execution available"
+            "message": "No execution available"
         }
 
     return execution
 
+
+# ==================================================
+# LATEST JOURNAL
+# ==================================================
 
 @router.get("/journal/latest")
 async def latest_journal():
@@ -394,13 +479,17 @@ async def latest_journal():
     )
 
     if journal is None:
+
         return {
-            "message":
-            "No journal available"
+            "message": "No journal available"
         }
 
     return journal
 
+
+# ==================================================
+# JOURNAL HISTORY
+# ==================================================
 
 @router.get("/journal/history")
 async def journal_history():
@@ -409,9 +498,12 @@ async def journal_history():
         limit=100
     )
 
-@router.get(
-    "/execution/pending"
-)
+
+# ==================================================
+# PENDING EXECUTION SIGNAL
+# ==================================================
+
+@router.get("/execution/pending")
 async def execution_pending():
 
     signal = (
@@ -426,9 +518,12 @@ async def execution_pending():
 
     return signal
 
-@router.post(
-    "/execution/confirm"
-)
+
+# ==================================================
+# CONFIRM EXECUTION
+# ==================================================
+
+@router.post("/execution/confirm")
 async def execution_confirm(
     payload: dict
 ):
@@ -443,9 +538,12 @@ async def execution_confirm(
         "success": True
     }
 
-@router.get(
-    "/journal"
-)
+
+# ==================================================
+# FULL JOURNAL
+# ==================================================
+
+@router.get("/journal")
 async def journal():
 
     return trade_journal.all()

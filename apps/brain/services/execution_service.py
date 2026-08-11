@@ -28,6 +28,10 @@ class ExecutionService:
         risk
     ):
 
+        # ==================================================
+        # NO DECISION
+        # ==================================================
+
         if decision is None:
 
             return ExecutionResult(
@@ -36,6 +40,10 @@ class ExecutionService:
                 lot=0.0,
                 reason="NO_DECISION"
             )
+
+        # ==================================================
+        # NO SIGNAL
+        # ==================================================
 
         if decision.decision == "NONE":
 
@@ -46,6 +54,10 @@ class ExecutionService:
                 reason="NO_SIGNAL"
             )
 
+        # ==================================================
+        # NO RISK
+        # ==================================================
+
         if risk is None:
 
             return ExecutionResult(
@@ -54,6 +66,10 @@ class ExecutionService:
                 lot=0.0,
                 reason="NO_RISK"
             )
+
+        # ==================================================
+        # RISK REJECTED
+        # ==================================================
 
         if not risk.approved:
 
@@ -64,6 +80,32 @@ class ExecutionService:
                 reason="RISK_REJECTED"
             )
 
+        # ==================================================
+        # EXISTING PENDING SIGNAL
+        #
+        # Do not create another signal while the previous
+        # signal is still waiting for MT5 execution.
+        #
+        # SignalStore automatically removes expired signals.
+        # ==================================================
+
+        existing_signal = (
+            signal_store.get_signal()
+        )
+
+        if existing_signal is not None:
+
+            return ExecutionResult(
+                executed=False,
+                order_type="NONE",
+                lot=0.0,
+                reason="SIGNAL_PENDING"
+            )
+
+        # ==================================================
+        # CONFIDENCE
+        # ==================================================
+
         confidence = max(
             0,
             min(
@@ -72,19 +114,45 @@ class ExecutionService:
             )
         )
 
+        # ==================================================
+        # LOT MANAGEMENT
+        #
+        # Keep existing RIRI lot management unchanged.
+        # ==================================================
+
         lot = DEFAULT_LOT
 
         if confidence >= 95:
-            lot = min(0.05, MAX_TOTAL_LOT)
+
+            lot = min(
+                0.05,
+                MAX_TOTAL_LOT
+            )
 
         elif confidence >= 90:
-            lot = min(0.04, MAX_TOTAL_LOT)
+
+            lot = min(
+                0.04,
+                MAX_TOTAL_LOT
+            )
 
         elif confidence >= 85:
-            lot = min(0.03, MAX_TOTAL_LOT)
+
+            lot = min(
+                0.03,
+                MAX_TOTAL_LOT
+            )
 
         elif confidence >= 80:
-            lot = min(0.02, MAX_TOTAL_LOT)
+
+            lot = min(
+                0.02,
+                MAX_TOTAL_LOT
+            )
+
+        # ==================================================
+        # CREATE EXECUTION SIGNAL
+        # ==================================================
 
         signal = ExecutionSignal(
 
@@ -107,9 +175,17 @@ class ExecutionService:
             status="PENDING"
         )
 
+        # ==================================================
+        # STORE SIGNAL
+        # ==================================================
+
         signal_store.set_signal(
             signal
         )
+
+        # ==================================================
+        # RESULT
+        # ==================================================
 
         return ExecutionResult(
 
