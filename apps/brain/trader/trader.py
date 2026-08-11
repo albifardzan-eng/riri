@@ -142,7 +142,6 @@ Only JSON.
             response = await self.client.responses.create(
                 model=MODEL_NAME,
                 input=prompt,
-                temperature=0
             )
 
             content = response.output_text.strip()
