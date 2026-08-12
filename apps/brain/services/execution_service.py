@@ -1,3 +1,4 @@
+import math
 import uuid
 
 from config.trading_config import (
@@ -20,12 +21,18 @@ from services.signal_store import (
 )
 
 
+BASE_EQUITY = 100.0
+EQUITY_STEP = 50.0
+LOT_STEP = 0.01
+
+
 class ExecutionService:
 
     async def execute(
         self,
         decision,
-        risk
+        risk,
+        market
     ):
 
         # ==================================================
@@ -82,11 +89,6 @@ class ExecutionService:
 
         # ==================================================
         # EXISTING PENDING SIGNAL
-        #
-        # Do not create another signal while the previous
-        # signal is still waiting for MT5 execution.
-        #
-        # SignalStore automatically removes expired signals.
         # ==================================================
 
         existing_signal = (
@@ -103,51 +105,116 @@ class ExecutionService:
             )
 
         # ==================================================
-        # CONFIDENCE
+        # EQUITY-BASED LOT MANAGEMENT
+        #
+        # $100  -> 0.01
+        # +$50  -> +0.01
+        #
+        # Examples:
+        #
+        # $100 -> 0.01
+        # $149 -> 0.01
+        # $150 -> 0.02
+        # $199 -> 0.02
+        # $200 -> 0.03
+        #
+        # Maximum = 0.50 lot
         # ==================================================
 
-        confidence = max(
-            0,
-            min(
-                100,
-                decision.confidence
+        equity = float(
+            market.equity
+        )
+
+        if equity < BASE_EQUITY:
+
+            return ExecutionResult(
+                executed=False,
+                order_type="NONE",
+                lot=0.0,
+                reason="EQUITY_BELOW_MINIMUM"
             )
+
+        equity_steps = math.floor(
+            (
+                equity -
+                BASE_EQUITY
+            ) / EQUITY_STEP
+        )
+
+        lot = (
+            LOT_STEP *
+            (equity_steps + 1)
         )
 
         # ==================================================
-        # LOT MANAGEMENT
-        #
-        # Keep existing RIRI lot management unchanged.
+        # NORMALIZE LOT
         # ==================================================
 
-        lot = DEFAULT_LOT
+        lot = round(
+            lot,
+            2
+        )
 
-        if confidence >= 95:
+        # ==================================================
+        # MAX LOT CAP
+        # ==================================================
 
-            lot = min(
-                0.05,
-                MAX_TOTAL_LOT
+        lot = min(
+            lot,
+            MAX_TOTAL_LOT
+        )
+
+        # ==================================================
+        # EXISTING ACTIVE LOT
+        #
+        # Make sure the new position does not cause
+        # total exposure to exceed MAX_TOTAL_LOT.
+        # ==================================================
+
+        active_lot = sum(
+            float(position.lot)
+            for position in market.positions
+        )
+
+        remaining_lot = (
+            MAX_TOTAL_LOT -
+            active_lot
+        )
+
+        remaining_lot = round(
+            remaining_lot,
+            2
+        )
+
+        if remaining_lot <= 0:
+
+            return ExecutionResult(
+                executed=False,
+                order_type="NONE",
+                lot=0.0,
+                reason="MAX_TOTAL_LOT"
             )
 
-        elif confidence >= 90:
+        # ==================================================
+        # LOT MUST FIT AVAILABLE TOTAL EXPOSURE
+        # ==================================================
 
-            lot = min(
-                0.04,
-                MAX_TOTAL_LOT
-            )
+        if lot > remaining_lot:
 
-        elif confidence >= 85:
+            lot = remaining_lot
 
-            lot = min(
-                0.03,
-                MAX_TOTAL_LOT
-            )
+        lot = round(
+            lot,
+            2
+        )
 
-        elif confidence >= 80:
+        if lot <= 0:
 
-            lot = min(
-                0.02,
-                MAX_TOTAL_LOT
+            return ExecutionResult(
+                executed=False,
+                order_type="NONE",
+                lot=0.0,
+                reason="INVALID_LOT"
             )
 
         # ==================================================
@@ -160,7 +227,7 @@ class ExecutionService:
                 uuid.uuid4()
             ),
 
-            symbol="XAUUSD",
+            symbol=market.symbol,
 
             action=decision.decision,
 
@@ -170,7 +237,13 @@ class ExecutionService:
 
             sl_points=SL_POINTS,
 
-            confidence=confidence,
+            confidence=max(
+                0,
+                min(
+                    100,
+                    decision.confidence
+                )
+            ),
 
             status="PENDING"
         )

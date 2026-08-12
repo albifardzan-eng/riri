@@ -185,7 +185,8 @@ async def receive_market_data(
         execution = (
             await execution_service.execute(
                 decision,
-                risk
+                risk,
+                data
             )
         )
 
