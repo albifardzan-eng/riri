@@ -33,6 +33,33 @@ class Position(BaseModel):
     tp: float = 0.0
 
 
+class FundamentalData(BaseModel):
+
+    available: bool = False
+
+    high_impact_news: bool = False
+
+    event: str | None = None
+
+    currency: str = "USD"
+
+    impact: str = "NONE"
+
+    phase: str | None = None
+
+    minutes_to_news: int | None = None
+
+    news_time: int | None = None
+
+    event_id: int | None = None
+
+    actual: float | None = None
+
+    forecast: float | None = None
+
+    previous: float | None = None
+
+
 class MarketData(BaseModel):
 
     symbol: str
@@ -59,4 +86,8 @@ class MarketData(BaseModel):
 
     positions: list[Position] = Field(
         default_factory=list
+    )
+
+    fundamental: FundamentalData = Field(
+        default_factory=FundamentalData
     )

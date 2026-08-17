@@ -8,21 +8,13 @@ from config.trading_config import (
     MAX_TOTAL_LOT
 )
 
-from models.execution import (
-    ExecutionResult
-)
+from models.execution import ExecutionResult
+from models.execution_signal import ExecutionSignal
 
-from models.execution_signal import (
-    ExecutionSignal
-)
-
-from services.signal_store import (
-    signal_store
-)
+from services.signal_store import signal_store
 
 
-BASE_EQUITY = 100.0
-EQUITY_STEP = 50.0
+EQUITY_STEP = 500.0
 LOT_STEP = 0.01
 
 
@@ -40,7 +32,6 @@ class ExecutionService:
         # ==================================================
 
         if decision is None:
-
             return ExecutionResult(
                 executed=False,
                 order_type="NONE",
@@ -53,7 +44,6 @@ class ExecutionService:
         # ==================================================
 
         if decision.decision == "NONE":
-
             return ExecutionResult(
                 executed=False,
                 order_type="NONE",
@@ -66,7 +56,6 @@ class ExecutionService:
         # ==================================================
 
         if risk is None:
-
             return ExecutionResult(
                 executed=False,
                 order_type="NONE",
@@ -79,7 +68,6 @@ class ExecutionService:
         # ==================================================
 
         if not risk.approved:
-
             return ExecutionResult(
                 executed=False,
                 order_type="NONE",
@@ -96,7 +84,6 @@ class ExecutionService:
         )
 
         if existing_signal is not None:
-
             return ExecutionResult(
                 executed=False,
                 order_type="NONE",
@@ -107,48 +94,28 @@ class ExecutionService:
         # ==================================================
         # EQUITY-BASED LOT MANAGEMENT
         #
-        # $100  -> 0.01
-        # +$50  -> +0.01
+        # $0 - < $500       -> 0.01
+        # $500 - < $1000    -> 0.02
+        # $1000 - < $1500   -> 0.03
+        # $1500 - < $2000   -> 0.04
+        # ...
         #
-        # Examples:
-        #
-        # $100 -> 0.01
-        # $149 -> 0.01
-        # $150 -> 0.02
-        # $199 -> 0.02
-        # $200 -> 0.03
-        #
-        # Maximum = 0.50 lot
+        # Maximum total lot = 0.50
         # ==================================================
 
-        equity = float(
-            market.equity
+        equity = max(
+            0.0,
+            float(market.equity)
         )
 
-        if equity < BASE_EQUITY:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="EQUITY_BELOW_MINIMUM"
-            )
-
         equity_steps = math.floor(
-            (
-                equity -
-                BASE_EQUITY
-            ) / EQUITY_STEP
+            equity / EQUITY_STEP
         )
 
         lot = (
             LOT_STEP *
             (equity_steps + 1)
         )
-
-        # ==================================================
-        # NORMALIZE LOT
-        # ==================================================
 
         lot = round(
             lot,
@@ -166,9 +133,6 @@ class ExecutionService:
 
         # ==================================================
         # EXISTING ACTIVE LOT
-        #
-        # Make sure the new position does not cause
-        # total exposure to exceed MAX_TOTAL_LOT.
         # ==================================================
 
         active_lot = sum(
@@ -176,18 +140,12 @@ class ExecutionService:
             for position in market.positions
         )
 
-        remaining_lot = (
-            MAX_TOTAL_LOT -
-            active_lot
-        )
-
         remaining_lot = round(
-            remaining_lot,
+            MAX_TOTAL_LOT - active_lot,
             2
         )
 
         if remaining_lot <= 0:
-
             return ExecutionResult(
                 executed=False,
                 order_type="NONE",
@@ -196,12 +154,13 @@ class ExecutionService:
             )
 
         # ==================================================
-        # LOT MUST FIT AVAILABLE TOTAL EXPOSURE
+        # FIT LOT INTO REMAINING EXPOSURE
         # ==================================================
 
-        if lot > remaining_lot:
-
-            lot = remaining_lot
+        lot = min(
+            lot,
+            remaining_lot
+        )
 
         lot = round(
             lot,
@@ -209,7 +168,6 @@ class ExecutionService:
         )
 
         if lot <= 0:
-
             return ExecutionResult(
                 executed=False,
                 order_type="NONE",
@@ -222,21 +180,14 @@ class ExecutionService:
         # ==================================================
 
         signal = ExecutionSignal(
-
             signal_id=str(
                 uuid.uuid4()
             ),
-
             symbol=market.symbol,
-
             action=decision.decision,
-
             lot=lot,
-
             tp_points=TP_POINTS,
-
             sl_points=SL_POINTS,
-
             confidence=max(
                 0,
                 min(
@@ -244,7 +195,6 @@ class ExecutionService:
                     decision.confidence
                 )
             ),
-
             status="PENDING"
         )
 
@@ -256,17 +206,9 @@ class ExecutionService:
             signal
         )
 
-        # ==================================================
-        # RESULT
-        # ==================================================
-
         return ExecutionResult(
-
             executed=True,
-
             order_type=decision.decision,
-
             lot=lot,
-
             reason="SIGNAL_CREATED"
         )
