@@ -1,12 +1,9 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter
 
 from models.status import StatusResponse
 from models.market_data import MarketData
 
 from config.settings import settings
-from config.trading_config import MAX_ACTIVE_TRADES
 
 from services.market_store import market_store
 from services.execution_service import ExecutionService
@@ -19,6 +16,7 @@ from trader.trader import AITrader
 from risk.risk import AIRisk
 
 from utils.logger import logger
+
 from websocket.websocket_server import manager
 
 from research.statistics_service import StatisticsService
@@ -28,129 +26,24 @@ from research.pattern_service import PatternService
 
 router = APIRouter()
 
+
+# ==================================================
+# SERVICES
+# ==================================================
+
 scoring_engine = ScoringEngine()
 
 statistics_service = StatisticsService()
+
 fundamental_service = FundamentalService()
+
 pattern_service = PatternService()
 
 ai_trader = AITrader()
+
 ai_risk = AIRisk()
 
 execution_service = ExecutionService()
-
-
-# ==================================================
-# CONFIGURATION
-# ==================================================
-
-MIN_ENTRY_INTERVAL_SECONDS = 30 * 60
-
-
-# ==================================================
-# HELPERS
-# ==================================================
-
-def can_call_ai_trader(
-    market: MarketData
-) -> tuple[bool, str]:
-
-    positions = market.positions
-
-    active_trades = len(
-        positions
-    )
-
-    # --------------------------------------------------
-    # MAX ACTIVE TRADES
-    # --------------------------------------------------
-
-    if active_trades >= MAX_ACTIVE_TRADES:
-
-        return (
-            False,
-            "MAX_ACTIVE_TRADES"
-        )
-
-    # --------------------------------------------------
-    # FIRST TRADE
-    #
-    # No existing position means AI can evaluate
-    # immediately once scoring qualifies.
-    # --------------------------------------------------
-
-    if active_trades == 0:
-
-        return (
-            True,
-            "FIRST_ENTRY"
-        )
-
-    # --------------------------------------------------
-    # FIND LATEST POSITION
-    # --------------------------------------------------
-
-    latest_open_time = max(
-        (
-            int(position.open_time)
-            for position in positions
-            if position.open_time > 0
-        ),
-        default=0
-    )
-
-    # --------------------------------------------------
-    # NO VALID OPEN TIME
-    # --------------------------------------------------
-
-    if latest_open_time <= 0:
-
-        return (
-            False,
-            "INVALID_POSITION_TIME"
-        )
-
-    # --------------------------------------------------
-    # 30-MINUTE ENTRY INTERVAL
-    # --------------------------------------------------
-
-    now = int(
-        datetime.now(
-            timezone.utc
-        ).timestamp()
-    )
-
-    elapsed_seconds = (
-        now -
-        latest_open_time
-    )
-
-    if elapsed_seconds < MIN_ENTRY_INTERVAL_SECONDS:
-
-        remaining_seconds = (
-            MIN_ENTRY_INTERVAL_SECONDS
-            - elapsed_seconds
-        )
-
-        remaining_minutes = max(
-            1,
-            int(
-                (
-                    remaining_seconds
-                    + 59
-                ) / 60
-            )
-        )
-
-        return (
-            False,
-            f"ENTRY_INTERVAL_{remaining_minutes}MIN"
-        )
-
-    return (
-        True,
-        "NEXT_ENTRY"
-    )
 
 
 # ==================================================
@@ -192,7 +85,7 @@ async def receive_market_data(
 ):
 
     # ==================================================
-    # MARKET
+    # STORE MARKET
     # ==================================================
 
     market_store.update(
@@ -200,7 +93,7 @@ async def receive_market_data(
     )
 
     # ==================================================
-    # SCORING
+    # SCORING ENGINE
     # ==================================================
 
     score = (
@@ -215,9 +108,6 @@ async def receive_market_data(
 
     # ==================================================
     # RESEARCH
-    #
-    # These services are local calculations.
-    # They do NOT consume AI tokens.
     # ==================================================
 
     statistics = (
@@ -227,10 +117,8 @@ async def receive_market_data(
     )
 
     fundamental = (
-    await fundamental_service.analyze(
-        data
+        await fundamental_service.analyze()
     )
-)
 
     pattern = (
         pattern_service.analyze(
@@ -251,79 +139,73 @@ async def receive_market_data(
     )
 
     # ==================================================
-    # DEFAULT RESULT
+    # DEFAULT PIPELINE RESULT
     # ==================================================
 
     decision = None
+
     risk = None
+
     execution = None
 
-    # ==================================================
-    # CHECK WHETHER AI TRADER MAY BE CALLED
-    # ==================================================
-
-    ai_allowed, ai_reason = (
-        can_call_ai_trader(
-            data
-        )
-    )
+    journal_record = None
 
     # ==================================================
-    # AI PIPELINE
+    # SCORE QUALIFICATION
+    #
+    # Score < MIN_SCORE:
+    # Do NOT call AI Trader.
     # ==================================================
 
-    if score.qualified and ai_allowed:
+    if score.qualified:
 
-        # ==============================================
+        # ==================================================
         # AI TRADER
-        # ==============================================
+        # ==================================================
 
         decision = (
             await ai_trader.decide(
 
-                # --------------------------------------
-                # MARKET
-                # --------------------------------------
                 market={
-                    "symbol": data.symbol,
+                    "symbol":
+                    data.symbol,
 
-                    "bid": data.bid,
+                    "bid":
+                    data.bid,
 
-                    "ask": data.ask,
+                    "ask":
+                    data.ask,
 
-                    "spread": data.spread,
+                    "spread":
+                    data.spread,
 
-                    "atr": data.atr,
+                    "atr":
+                    data.atr,
 
-                    "tick_volume": data.tick_volume,
+                    "tick_volume":
+                    data.tick_volume,
 
-                    "equity": data.equity,
+                    "balance":
+                    data.balance,
 
-                    "free_margin": data.free_margin,
+                    "equity":
+                    data.equity,
+
+                    "free_margin":
+                    data.free_margin,
+
+                    "candles": [
+                        candle.model_dump()
+                        for candle
+                        in data.candles
+                    ],
 
                     "positions": [
                         position.model_dump()
                         for position
                         in data.positions
-                    ],
-
-                    # Full candle history
-                    # is required for:
-                    # - reversal
-                    # - SNR
-                    # - exhaustion
-                    # - failed breakout
-                    # - candle sequence
-                    "candles": [
-                        candle.model_dump()
-                        for candle
-                        in data.candles
                     ]
                 },
-
-                # --------------------------------------
-                # RESEARCH
-                # --------------------------------------
 
                 statistics=statistics,
 
@@ -333,17 +215,23 @@ async def receive_market_data(
             )
         )
 
+        # ==================================================
+        # STORE AI DECISION
+        # ==================================================
+
         market_store.update_decision(
             decision
         )
 
-        # ==============================================
+        # ==================================================
         # AI RISK
-        # ==============================================
+        # ==================================================
 
         risk = (
             await ai_risk.evaluate(
+
                 market=data,
+
                 trader_decision=decision
             )
         )
@@ -352,15 +240,18 @@ async def receive_market_data(
             risk
         )
 
-        # ==============================================
+        # ==================================================
         # EXECUTION
-        # ==============================================
+        # ==================================================
 
         execution = (
             await execution_service.execute(
-                decision,
-                risk,
-                data
+
+                decision=decision,
+
+                risk=risk,
+
+                market=data
             )
         )
 
@@ -368,43 +259,47 @@ async def receive_market_data(
             execution
         )
 
-        # ==============================================
+        # ==================================================
         # JOURNAL
-        # ==============================================
+        # ==================================================
 
         journal_record = {
 
-            "symbol": data.symbol,
+            "symbol":
+            data.symbol,
 
-            "score": (
-                score.model_dump()
-            ),
+            "score":
+            score.model_dump(),
 
-            "statistics": statistics,
+            "statistics":
+            statistics,
 
-            "fundamental": fundamental,
+            "fundamental":
+            fundamental,
 
-            "pattern": pattern,
+            "pattern":
+            pattern,
 
-            "decision": (
+            "decision":
+            (
                 decision.model_dump()
                 if decision
                 else None
             ),
 
-            "risk": (
+            "risk":
+            (
                 risk.model_dump()
                 if risk
                 else None
             ),
 
-            "execution": (
+            "execution":
+            (
                 execution.model_dump()
                 if execution
                 else None
-            ),
-
-            "ai_call_reason": ai_reason
+            )
         }
 
         trade_journal.write(
@@ -416,75 +311,50 @@ async def receive_market_data(
         )
 
     # ==================================================
-    # AI NOT CALLED
-    #
-    # Important:
-    #
-    # Qualified=False
-    #     -> scoring rejected
-    #
-    # MAX_ACTIVE_TRADES
-    #     -> already 3 positions
-    #
-    # ENTRY_INTERVAL
-    #     -> less than 30 minutes
-    #
-    # This prevents unnecessary AI API calls.
-    # ==================================================
-
-    else:
-
-        if not score.qualified:
-
-            ai_reason = (
-                "SCORE_NOT_QUALIFIED"
-            )
-
-        # No AI decision is generated here.
-
-    # ==================================================
     # WEBSOCKET
     # ==================================================
 
     await manager.broadcast(
         {
-            "type": "market_update",
 
-            "market": (
-                data.model_dump()
-            ),
+            "type":
+            "market_update",
 
-            "score": (
-                score.model_dump()
-            ),
+            "market":
+            data.model_dump(),
 
-            "statistics": statistics,
+            "score":
+            score.model_dump(),
 
-            "fundamental": fundamental,
+            "statistics":
+            statistics,
 
-            "pattern": pattern,
+            "fundamental":
+            fundamental,
 
-            "decision": (
+            "pattern":
+            pattern,
+
+            "decision":
+            (
                 decision.model_dump()
                 if decision
                 else None
             ),
 
-            "risk": (
+            "risk":
+            (
                 risk.model_dump()
                 if risk
                 else None
             ),
 
-            "execution": (
+            "execution":
+            (
                 execution.model_dump()
                 if execution
                 else None
-            ),
-
-            "ai_allowed": ai_allowed,
-
-            "ai_call_reason": ai_reason
+            )
         }
     )
 
@@ -495,8 +365,12 @@ async def receive_market_data(
     logger.info(
         f"Score={score.score} "
         f"Qualified={score.qualified} "
-        f"AIAllowed={ai_allowed} "
-        f"AIReason={ai_reason}"
+        f"Decision="
+        f"{decision.decision if decision else 'NONE'} "
+        f"Risk="
+        f"{risk.approved if risk else 'NONE'} "
+        f"Execution="
+        f"{execution.executed if execution else 'NONE'}"
     )
 
     # ==================================================
@@ -505,29 +379,31 @@ async def receive_market_data(
 
     return {
 
-        "success": True,
+        "success":
+        True,
 
-        "score": score.score,
+        "score":
+        score.score,
 
-        "qualified": score.qualified,
+        "qualified":
+        score.qualified,
 
-        "ai_allowed": ai_allowed,
-
-        "ai_call_reason": ai_reason,
-
-        "decision": (
+        "decision":
+        (
             decision.model_dump()
             if decision
             else None
         ),
 
-        "risk": (
+        "risk":
+        (
             risk.model_dump()
             if risk
             else None
         ),
 
-        "execution": (
+        "execution":
+        (
             execution.model_dump()
             if execution
             else None
@@ -549,7 +425,8 @@ async def latest_market():
     if market is None:
 
         return {
-            "message": "No market data available"
+            "message":
+            "No market data available"
         }
 
     return market
@@ -569,7 +446,8 @@ async def latest_score():
     if score is None:
 
         return {
-            "message": "No score available"
+            "message":
+            "No score available"
         }
 
     return score
@@ -589,7 +467,8 @@ async def latest_statistics():
     if statistics is None:
 
         return {
-            "message": "No statistics available"
+            "message":
+            "No statistics available"
         }
 
     return statistics
@@ -609,7 +488,8 @@ async def latest_fundamental():
     if fundamental is None:
 
         return {
-            "message": "No fundamental data available"
+            "message":
+            "No fundamental data available"
         }
 
     return fundamental
@@ -629,7 +509,8 @@ async def latest_pattern():
     if pattern is None:
 
         return {
-            "message": "No pattern data available"
+            "message":
+            "No pattern available"
         }
 
     return pattern
@@ -649,7 +530,8 @@ async def latest_decision():
     if decision is None:
 
         return {
-            "message": "No decision available"
+            "message":
+            "No decision available"
         }
 
     return decision
@@ -669,7 +551,8 @@ async def latest_risk():
     if risk is None:
 
         return {
-            "message": "No risk available"
+            "message":
+            "No risk available"
         }
 
     return risk
@@ -689,7 +572,8 @@ async def latest_execution():
     if execution is None:
 
         return {
-            "message": "No execution available"
+            "message":
+            "No execution available"
         }
 
     return execution
@@ -709,7 +593,8 @@ async def latest_journal():
     if journal is None:
 
         return {
-            "message": "No journal available"
+            "message":
+            "No journal available"
         }
 
     return journal
@@ -741,10 +626,14 @@ async def execution_pending():
     if signal is None:
 
         return {
-            "signal": None
+            "signal":
+            None
         }
 
-    return signal
+    return {
+        "signal":
+        signal
+    }
 
 
 # ==================================================
@@ -763,7 +652,8 @@ async def execution_confirm(
     signal_store.clear()
 
     return {
-        "success": True
+        "success":
+        True
     }
 
 

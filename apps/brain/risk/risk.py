@@ -8,9 +8,16 @@ from config.trading_config import (
 )
 
 
+# ==================================================
+# RISK CONFIGURATION
+# ==================================================
+
 MIN_ENTRY_INTERVAL_SECONDS = 30 * 60
-MIN_FREE_MARGIN = 100.0
+
+MIN_FREE_MARGIN = 0.0
+
 MAX_SPREAD = 30.0
+
 MIN_ATR = 1.0
 
 
@@ -22,27 +29,48 @@ class AIRisk:
         trader_decision
     ) -> RiskDecision:
 
+        # ==================================================
+        # NO TRADER DECISION
+        # ==================================================
+
         if trader_decision is None:
+
             return RiskDecision(
                 approved=False,
                 risk_score=0,
                 reason="NO_TRADER_DECISION"
             )
 
+        # ==================================================
+        # NO SIGNAL
+        # ==================================================
+
         if trader_decision.decision == "NONE":
+
             return RiskDecision(
                 approved=False,
                 risk_score=0,
                 reason="NO_SIGNAL"
             )
 
+        # ==================================================
+        # POSITIONS
+        # ==================================================
+
         positions = market.positions
 
-        active_trades = len(positions)
+        active_trades = len(
+            positions
+        )
 
         total_lot = sum(
             float(position.lot)
             for position in positions
+        )
+
+        total_lot = round(
+            total_lot,
+            2
         )
 
         # ==================================================
@@ -50,6 +78,7 @@ class AIRisk:
         # ==================================================
 
         if active_trades >= MAX_ACTIVE_TRADES:
+
             return RiskDecision(
                 approved=False,
                 risk_score=0,
@@ -61,6 +90,7 @@ class AIRisk:
         # ==================================================
 
         if total_lot >= MAX_TOTAL_LOT:
+
             return RiskDecision(
                 approved=False,
                 risk_score=0,
@@ -68,7 +98,10 @@ class AIRisk:
             )
 
         # ==================================================
-        # MINIMUM ENTRY INTERVAL = 30 MINUTES
+        # MINIMUM ENTRY INTERVAL
+        #
+        # Existing newest position must be at least
+        # 1 hour old before a new position is allowed.
         # ==================================================
 
         if active_trades > 0:
@@ -91,10 +124,18 @@ class AIRisk:
                 )
 
                 elapsed_seconds = (
-                    now - latest_open_time
+                    now -
+                    latest_open_time
                 )
 
-                if elapsed_seconds < MIN_ENTRY_INTERVAL_SECONDS:
+                if elapsed_seconds < 0:
+
+                    elapsed_seconds = 0
+
+                if (
+                    elapsed_seconds
+                    < MIN_ENTRY_INTERVAL_SECONDS
+                ):
 
                     remaining_seconds = (
                         MIN_ENTRY_INTERVAL_SECONDS
@@ -105,7 +146,8 @@ class AIRisk:
                         1,
                         int(
                             (
-                                remaining_seconds + 59
+                                remaining_seconds
+                                + 59
                             ) / 60
                         )
                     )
@@ -114,13 +156,13 @@ class AIRisk:
                         approved=False,
                         risk_score=0,
                         reason=(
-                            "MIN_ENTRY_INTERVAL"
-                            f"_{remaining_minutes}MIN"
+                            "MIN_ENTRY_INTERVAL_"
+                            f"{remaining_minutes}MIN"
                         )
                     )
 
         # ==================================================
-        # MARKET RISK
+        # MARKET RISK DATA
         # ==================================================
 
         free_margin = float(
@@ -135,37 +177,84 @@ class AIRisk:
             market.atr
         )
 
+        # ==================================================
+        # BASE RISK SCORE
+        # ==================================================
+
         score = 100
 
         reasons = []
 
+        # ==================================================
+        # FREE MARGIN
+        # ==================================================
+
         if free_margin < MIN_FREE_MARGIN:
+
             score -= 30
-            reasons.append("LOW_MARGIN")
+
+            reasons.append(
+                "LOW_MARGIN"
+            )
+
+        # ==================================================
+        # SPREAD
+        # ==================================================
 
         if spread > MAX_SPREAD:
+
             score -= 20
-            reasons.append("HIGH_SPREAD")
+
+            reasons.append(
+                "HIGH_SPREAD"
+            )
+
+        # ==================================================
+        # VOLATILITY
+        # ==================================================
 
         if atr < MIN_ATR:
+
             score -= 10
-            reasons.append("LOW_VOLATILITY")
+
+            reasons.append(
+                "LOW_VOLATILITY"
+            )
+
+        # ==================================================
+        # NORMALIZE
+        # ==================================================
 
         score = max(
             0,
             min(
-                score,
-                100
+                100,
+                score
             )
         )
 
-        approved = score >= 70
+        # ==================================================
+        # APPROVAL
+        # ==================================================
+
+        approved = (
+            score >= 70
+        )
+
+        # ==================================================
+        # REASON
+        # ==================================================
 
         if not reasons:
-            reasons.append("PASS")
+
+            reasons.append(
+                "PASS"
+            )
 
         return RiskDecision(
             approved=approved,
             risk_score=score,
-            reason=", ".join(reasons)
+            reason=", ".join(
+                reasons
+            )
         )

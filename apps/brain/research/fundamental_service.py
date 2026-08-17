@@ -1,176 +1,197 @@
+import statistics
+
 from datetime import datetime, timezone
 
 
 class FundamentalService:
 
-    async def analyze(
-        self,
-        market
-    ):
+    async def analyze(self):
 
-        if market is None:
+        # ==================================================
+        # CURRENT UTC TIME
+        # ==================================================
 
-            return self._default()
-
-        fundamental = (
-            market.fundamental
+        now = datetime.now(
+            timezone.utc
         )
 
-        if fundamental is None:
+        utc_hour = now.hour
 
-            return self._default()
+        # ==================================================
+        # TRADING SESSIONS
+        # ==================================================
 
-        high_impact_news = (
-            fundamental.high_impact_news
+        london_session = (
+            7 <= utc_hour <= 16
         )
 
-        minutes_to_news = (
-            fundamental.minutes_to_news
+        newyork_session = (
+            12 <= utc_hour <= 21
         )
 
-        phase = (
-            fundamental.phase
+        overlap = (
+            london_session
+            and newyork_session
         )
 
-        risk_level = "NORMAL"
+        # ==================================================
+        # SESSION
+        # ==================================================
 
-        if high_impact_news:
+        if overlap:
 
-            # ------------------------------------------
-            # UPCOMING HIGH IMPACT NEWS
-            # ------------------------------------------
+            session = "OVERLAP"
 
-            if (
-                phase == "UPCOMING"
-                and
-                minutes_to_news is not None
-            ):
+        elif newyork_session:
 
-                if minutes_to_news <= 5:
+            session = "NEWYORK"
 
-                    risk_level = "EXTREME"
+        elif london_session:
 
-                elif minutes_to_news <= 15:
+            session = "LONDON"
 
-                    risk_level = "HIGH"
+        else:
 
-                else:
+            session = "ASIA"
 
-                    risk_level = "ELEVATED"
-
-            # ------------------------------------------
-            # RECENT HIGH IMPACT NEWS
-            # ------------------------------------------
-
-            elif phase == "RECENT":
-
-                # Recent release means market can still
-                # be experiencing displacement,
-                # spread expansion and price discovery.
-
-                if (
-                    minutes_to_news is not None
-                    and
-                    abs(minutes_to_news) <= 5
-                ):
-
-                    risk_level = "EXTREME"
-
-                else:
-
-                    risk_level = "HIGH"
-
-        # ----------------------------------------------
-        # GOLD / USD BIAS
+        # ==================================================
+        # MARKET SENTIMENT
         #
-        # We intentionally DO NOT infer directional bias
-        # simply from event name.
-        #
-        # AI Trader should evaluate actual vs forecast
-        # together with price action.
-        # ----------------------------------------------
+        # No external fundamental/news feed yet.
+        # Therefore sentiment remains neutral.
+        # ==================================================
+
+        market_sentiment = "NEUTRAL"
 
         gold_bias = "NEUTRAL"
 
         usd_bias = "NEUTRAL"
 
-        actual = fundamental.actual
+        # ==================================================
+        # CONFIDENCE
+        #
+        # Session/liquidity confidence only.
+        # ==================================================
 
-        forecast = fundamental.forecast
+        if overlap:
 
-        if (
-            actual is not None
-            and
-            forecast is not None
+            confidence = 80
+
+        elif (
+            london_session
+            or newyork_session
         ):
 
-            if actual > forecast:
-
-                usd_bias = "POTENTIALLY_STRONGER"
-
-            elif actual < forecast:
-
-                usd_bias = "POTENTIALLY_WEAKER"
-
-        # ----------------------------------------------
-        # SCORE
-        # ----------------------------------------------
-
-        if risk_level == "EXTREME":
-
-            score = 20
-
-        elif risk_level == "HIGH":
-
-            score = 35
-
-        elif risk_level == "ELEVATED":
-
-            score = 50
+            confidence = 65
 
         else:
 
-            score = 70
+            confidence = 50
+
+        # ==================================================
+        # LIQUIDITY
+        # ==================================================
+
+        if overlap:
+
+            liquidity = "VERY_HIGH"
+
+        elif (
+            london_session
+            or newyork_session
+        ):
+
+            liquidity = "HIGH"
+
+        else:
+
+            liquidity = "LOW"
+
+        # ==================================================
+        # VOLATILITY
+        # ==================================================
+
+        if overlap:
+
+            volatility = "HIGH"
+
+        elif (
+            london_session
+            or newyork_session
+        ):
+
+            volatility = "MEDIUM"
+
+        else:
+
+            volatility = "LOW"
+
+        # ==================================================
+        # NEWS
+        #
+        # No external economic calendar connected yet.
+        # ==================================================
+
+        high_impact_news = False
+
+        minutes_to_news = None
+
+        # ==================================================
+        # RISK LEVEL
+        # ==================================================
+
+        risk_level = "NORMAL"
+
+        # ==================================================
+        # SCORE
+        # ==================================================
+
+        session_score = (
+            70
+            if overlap
+            else 50
+        )
+
+        liquidity_score = (
+            70
+            if liquidity == "VERY_HIGH"
+            else 55
+        )
+
+        score = statistics.fmean(
+            [
+                confidence,
+                session_score,
+                liquidity_score
+            ]
+        )
+
+        # ==================================================
+        # RESULT
+        # ==================================================
 
         return {
 
-            "available":
-            fundamental.available,
-
             "market_sentiment":
-            "NEWS_DRIVEN"
-            if high_impact_news
-            else "NEUTRAL",
+            market_sentiment,
+
+            "confidence":
+            confidence,
+
+            "session":
+            session,
+
+            "liquidity":
+            liquidity,
+
+            "volatility":
+            volatility,
 
             "high_impact_news":
             high_impact_news,
 
-            "event":
-            fundamental.event,
-
-            "currency":
-            fundamental.currency,
-
-            "impact":
-            fundamental.impact,
-
-            "phase":
-            phase,
-
             "minutes_to_news":
             minutes_to_news,
-
-            "news_time":
-            fundamental.news_time,
-
-            "actual":
-            actual,
-
-            "forecast":
-            forecast,
-
-            "previous":
-            fundamental.previous,
 
             "gold_bias":
             gold_bias,
@@ -182,58 +203,8 @@ class FundamentalService:
             risk_level,
 
             "score":
-            score
-        }
-
-    def _default(self):
-
-        return {
-
-            "available":
-            False,
-
-            "market_sentiment":
-            "NEUTRAL",
-
-            "high_impact_news":
-            False,
-
-            "event":
-            None,
-
-            "currency":
-            "USD",
-
-            "impact":
-            "NONE",
-
-            "phase":
-            None,
-
-            "minutes_to_news":
-            None,
-
-            "news_time":
-            None,
-
-            "actual":
-            None,
-
-            "forecast":
-            None,
-
-            "previous":
-            None,
-
-            "gold_bias":
-            "NEUTRAL",
-
-            "usd_bias":
-            "NEUTRAL",
-
-            "risk_level":
-            "UNKNOWN",
-
-            "score":
-            50
+            round(
+                score,
+                2
+            )
         }
