@@ -2,17 +2,23 @@ from pydantic import BaseModel, Field
 
 
 class Candle(BaseModel):
+    """
+    OHLCV candle.
+    """
 
     time: int = 0
 
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    close: float = 0.0
+    volume: float = 0.0
 
 
 class Position(BaseModel):
+    """
+    Currently open MT5 position.
+    """
 
     ticket: int
 
@@ -34,6 +40,13 @@ class Position(BaseModel):
 
 
 class FundamentalData(BaseModel):
+    """
+    Fundamental and economic-calendar information.
+
+    The current RIRI implementation may not have an
+    external news provider yet, therefore all fields
+    have safe defaults.
+    """
 
     available: bool = False
 
@@ -61,6 +74,13 @@ class FundamentalData(BaseModel):
 
 
 class MarketData(BaseModel):
+    """
+    Complete market snapshot received from MT5.
+
+    This object is the primary market-state contract
+    consumed by scoring, statistics, pattern,
+    fundamental and risk services.
+    """
 
     symbol: str
 

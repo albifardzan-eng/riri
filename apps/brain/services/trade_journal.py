@@ -1,30 +1,74 @@
-from pathlib import Path
-from datetime import datetime, date, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
+from pathlib import Path
+from threading import Lock
 import json
+import os
+import tempfile
+from typing import Any
 
 
 class TradeJournal:
+    """
+    Persistent JSON journal for RIRI.
 
-    def __init__(self):
+    The journal stores trade lifecycle events such as:
 
-        self.path = Path(
-            "trade_journal.json"
-        )
+        SIGNAL_CREATED
+        TRADE_EXECUTED
+        TRADE_REJECTED
+        TRADE_CLOSED
 
-        if not self.path.exists():
+    The implementation uses:
+        - UTC timestamps
+        - JSON-safe serialization
+        - thread protection
+        - atomic file replacement
 
-            self.path.write_text(
-                "[]",
-                encoding="utf-8"
-            )
+    This keeps the local journal reasonably safe for
+    the current RIRI v1 architecture.
+    """
+
+    def __init__(
+        self,
+        path: str | Path = "trade_journal.json"
+    ) -> None:
+
+        self.path = Path(path)
+
+        self._lock = Lock()
+
+        self._ensure_file()
+
 
     # ==================================================
-    # SERIALIZE
+    # FILE INITIALIZATION
+    # ==================================================
+
+    def _ensure_file(self) -> None:
+
+        self.path.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        if self.path.exists():
+            return
+
+        self.path.write_text(
+            "[]",
+            encoding="utf-8"
+        )
+
+
+    # ==================================================
+    # SERIALIZATION
     # ==================================================
 
     @staticmethod
-    def _serialize(value):
+    def _serialize(
+        value: Any
+    ) -> Any:
 
         if value is None:
             return None
@@ -38,6 +82,7 @@ class TradeJournal:
                 bool
             )
         ):
+
             return value
 
         if isinstance(
@@ -47,13 +92,17 @@ class TradeJournal:
                 date
             )
         ):
+
             return value.isoformat()
 
         if isinstance(
             value,
             Enum
         ):
-            return value.value
+
+            return TradeJournal._serialize(
+                value.value
+            )
 
         if isinstance(
             value,
@@ -62,8 +111,9 @@ class TradeJournal:
 
             return {
                 str(key):
-                TradeJournal._serialize(val)
-
+                TradeJournal._serialize(
+                    val
+                )
                 for key, val in value.items()
             }
 
@@ -77,7 +127,9 @@ class TradeJournal:
         ):
 
             return [
-                TradeJournal._serialize(item)
+                TradeJournal._serialize(
+                    item
+                )
                 for item in value
             ]
 
@@ -88,9 +140,18 @@ class TradeJournal:
             "model_dump"
         ):
 
-            return TradeJournal._serialize(
-                value.model_dump()
-            )
+            try:
+
+                return TradeJournal._serialize(
+                    value.model_dump()
+                )
+
+            except (
+                TypeError,
+                ValueError
+            ):
+
+                pass
 
         # NumPy / Pandas scalar
 
@@ -112,7 +173,7 @@ class TradeJournal:
 
                 pass
 
-        # NumPy / Pandas arrays
+        # NumPy / Pandas array
 
         if hasattr(
             value,
@@ -134,18 +195,19 @@ class TradeJournal:
 
         return str(value)
 
+
     # ==================================================
     # LOAD
     # ==================================================
 
-    def _load(self):
+    def _load(self) -> list:
+
+        self._ensure_file()
 
         try:
 
-            content = (
-                self.path.read_text(
-                    encoding="utf-8"
-                )
+            content = self.path.read_text(
+                encoding="utf-8"
             )
 
             if not content.strip():
@@ -172,16 +234,91 @@ class TradeJournal:
 
             return []
 
+
     # ==================================================
-    # ADD JOURNAL RECORD
+    # SAVE
+    # ==================================================
+
+    def _save(
+        self,
+        trades: list
+    ) -> None:
+
+        serialized = json.dumps(
+            trades,
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=False
+        )
+
+        self.path.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        # --------------------------------------------------
+        # Atomic write
+        #
+        # Write to temporary file first, then replace the
+        # existing journal.
+        # --------------------------------------------------
+
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".trade_journal_",
+            suffix=".tmp",
+            dir=str(
+                self.path.parent
+            )
+        )
+
+        try:
+
+            with os.fdopen(
+                fd,
+                "w",
+                encoding="utf-8"
+            ) as temp_file:
+
+                temp_file.write(
+                    serialized
+                )
+
+                temp_file.flush()
+
+                os.fsync(
+                    temp_file.fileno()
+                )
+
+            os.replace(
+                temp_path,
+                self.path
+            )
+
+        finally:
+
+            if os.path.exists(
+                temp_path
+            ):
+
+                try:
+
+                    os.remove(
+                        temp_path
+                    )
+
+                except OSError:
+
+                    pass
+
+
+    # ==================================================
+    # ADD
     # ==================================================
 
     def add(
         self,
-        trade
-    ):
-
-        trades = self._load()
+        trade: Any
+    ) -> dict:
 
         record = self._serialize(
             trade
@@ -196,29 +333,31 @@ class TradeJournal:
                 "data": record
             }
 
-        record["timestamp"] = (
+        record = dict(
+            record
+        )
+
+        record.setdefault(
+            "timestamp",
             datetime.now(
                 timezone.utc
             ).isoformat()
         )
 
-        trades.append(
-            record
-        )
+        with self._lock:
 
-        serialized = json.dumps(
-            trades,
-            indent=2,
-            ensure_ascii=False,
-            allow_nan=False
-        )
+            trades = self._load()
 
-        self.path.write_text(
-            serialized,
-            encoding="utf-8"
-        )
+            trades.append(
+                record
+            )
+
+            self._save(
+                trades
+            )
 
         return record
+
 
     # ==================================================
     # WRITE
@@ -226,20 +365,57 @@ class TradeJournal:
 
     def write(
         self,
-        trade
-    ):
+        trade: Any
+    ) -> dict:
 
         return self.add(
             trade
         )
 
+
+    # ==================================================
+    # EVENT
+    # ==================================================
+
+    def event(
+        self,
+        event: str,
+        **data: Any
+    ) -> dict:
+        """
+        Convenience method for writing standardized
+        lifecycle events.
+
+        Example:
+
+            trade_journal.event(
+                "TRADE_EXECUTED",
+                signal_id="abc",
+                action="BUY",
+                lot=0.01
+            )
+        """
+
+        record = {
+            "event": event,
+            **data
+        }
+
+        return self.add(
+            record
+        )
+
+
     # ==================================================
     # ALL
     # ==================================================
 
-    def all(self):
+    def all(self) -> list:
 
-        return self._load()
+        with self._lock:
+
+            return self._load()
+
 
     # ==================================================
     # LATEST
@@ -247,22 +423,26 @@ class TradeJournal:
 
     def latest(
         self,
-        limit=100
-    ):
-
-        trades = self._load()
+        limit: int = 100
+    ) -> list:
 
         if limit <= 0:
-
             return []
 
-        return trades[-limit:]
+        with self._lock:
+
+            trades = self._load()
+
+            return trades[-limit:]
+
 
     # ==================================================
     # LAST EXECUTED TRADE
     # ==================================================
 
-    def last_executed_trade(self):
+    def last_executed_trade(
+        self
+    ) -> datetime | None:
 
         trades = self._load()
 
@@ -293,9 +473,17 @@ class TradeJournal:
 
             try:
 
-                return datetime.fromisoformat(
+                parsed = datetime.fromisoformat(
                     timestamp
                 )
+
+                if parsed.tzinfo is None:
+
+                    parsed = parsed.replace(
+                        tzinfo=timezone.utc
+                    )
+
+                return parsed
 
             except (
                 ValueError,
@@ -305,6 +493,54 @@ class TradeJournal:
                 continue
 
         return None
+
+
+    # ==================================================
+    # LAST EXECUTED TRADE TIMESTAMP
+    # ==================================================
+
+    def last_executed_timestamp(
+        self
+    ) -> int | None:
+
+        timestamp = self.last_executed_trade()
+
+        if timestamp is None:
+            return None
+
+        return int(
+            timestamp.timestamp()
+        )
+
+
+    # ==================================================
+    # COUNT
+    # ==================================================
+
+    def count(
+        self,
+        event: str | None = None
+    ) -> int:
+
+        with self._lock:
+
+            trades = self._load()
+
+        if event is None:
+
+            return len(
+                trades
+            )
+
+        return sum(
+            1
+            for record in trades
+            if (
+                isinstance(record, dict)
+                and
+                record.get("event") == event
+            )
+        )
 
 
 # ==================================================

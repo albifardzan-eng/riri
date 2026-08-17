@@ -1,22 +1,75 @@
+from __future__ import annotations
+
+import math
+
 import pandas as pd
 
 
 class StatisticsService:
+    """
+    Calculates deterministic market statistics for RIRI.
+
+    This service does not make trading decisions.
+
+    It provides:
+        - trend
+        - momentum
+        - volatility
+        - support / resistance
+        - market location
+        - overextension
+        - candle rejection
+        - volume conditions
+        - reversal evidence
+
+    AI Trader remains responsible for the final
+    BUY / SELL / NONE decision.
+    """
+
+    MIN_CANDLES = 100
+
+    EMA_FAST = 5
+    EMA_MID = 10
+    EMA_SLOW = 100
+
+    MOMENTUM_FAST_LOOKBACK = 5
+    MOMENTUM_SLOW_LOOKBACK = 10
+
+    RECENT_RANGE_LOOKBACK = 20
+    SNR_LOOKBACK = 50
+    VOLUME_LOOKBACK = 20
+
+    SNR_ATR_MULTIPLIER = 1.5
+    SNR_MIN_DISTANCE = 1.0
+
+    OVEREXTENSION_ATR_MULTIPLIER = 2.0
+    OVEREXTENSION_MIN_DISTANCE = 2.0
+
+    SHARP_MOVE_MULTIPLIER = 2.0
+
+    VOLUME_SPIKE_RATIO = 1.30
+
+    REJECTION_WICK_BODY_RATIO = 1.5
+    REJECTION_RANGE_RATIO = 0.30
 
     def analyze(
         self,
         market
-    ):
+    ) -> dict | None:
 
         # ==================================================
         # VALIDATION
         # ==================================================
 
-        if (
-            market is None
-            or len(market.candles) < 100
-        ):
+        if market is None:
             return None
+
+        if len(market.candles) < self.MIN_CANDLES:
+            return None
+
+        # ==================================================
+        # DATAFRAME
+        # ==================================================
 
         df = pd.DataFrame(
             [
@@ -25,14 +78,57 @@ class StatisticsService:
             ]
         )
 
+        required_columns = {
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+        }
+
+        if not required_columns.issubset(
+            df.columns
+        ):
+            return None
+
+        # Remove invalid rows.
+
+        df = df[
+            [
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+            ]
+        ].copy()
+
+        df = df.replace(
+            [
+                float("inf"),
+                float("-inf"),
+            ],
+            float("nan")
+        )
+
+        df = df.dropna()
+
+        if len(df) < self.MIN_CANDLES:
+            return None
+
         # ==================================================
-        # PRICE DATA
+        # PRICE SERIES
         # ==================================================
 
-        closes = df["close"]
-        highs = df["high"]
-        lows = df["low"]
-        volumes = df["volume"]
+        opens = df["open"].astype(float)
+        highs = df["high"].astype(float)
+        lows = df["low"].astype(float)
+        closes = df["close"].astype(float)
+        volumes = df["volume"].astype(float)
+
+        last_open = float(
+            opens.iloc[-1]
+        )
 
         last_close = float(
             closes.iloc[-1]
@@ -47,37 +143,41 @@ class StatisticsService:
         )
 
         # ==================================================
+        # BASIC VALIDATION
+        # ==================================================
+
+        if last_close <= 0:
+            return None
+
+        # ==================================================
         # EMA
         # ==================================================
 
-        ema5 = (
-            closes
-            .ewm(
-                span=5,
-                adjust=False
-            )
-            .mean()
-            .iloc[-1]
+        ema5_series = closes.ewm(
+            span=self.EMA_FAST,
+            adjust=False
+        ).mean()
+
+        ema10_series = closes.ewm(
+            span=self.EMA_MID,
+            adjust=False
+        ).mean()
+
+        ema100_series = closes.ewm(
+            span=self.EMA_SLOW,
+            adjust=False
+        ).mean()
+
+        ema5 = float(
+            ema5_series.iloc[-1]
         )
 
-        ema10 = (
-            closes
-            .ewm(
-                span=10,
-                adjust=False
-            )
-            .mean()
-            .iloc[-1]
+        ema10 = float(
+            ema10_series.iloc[-1]
         )
 
-        ema100 = (
-            closes
-            .ewm(
-                span=100,
-                adjust=False
-            )
-            .mean()
-            .iloc[-1]
+        ema100 = float(
+            ema100_series.iloc[-1]
         )
 
         # ==================================================
@@ -100,32 +200,125 @@ class StatisticsService:
         # TREND STRENGTH
         # ==================================================
 
-        trend_strength = min(
-            100,
-            int(
-                abs(
-                    (ema5 - ema100)
-                    / ema100
-                ) * 10000
+        trend_strength = 0
+
+        if ema100 != 0:
+
+            trend_strength = min(
+                100,
+                max(
+                    0,
+                    int(
+                        abs(
+                            (
+                                ema5
+                                -
+                                ema100
+                            )
+                            /
+                            ema100
+                        )
+                        * 10000
+                    )
+                )
             )
-        )
 
         # ==================================================
-        # DAILY / SESSION RANGE
+        # CANDLE RANGE SERIES
         # ==================================================
 
-        daily_range = (
-            highs.max()
-            - lows.min()
+        candle_ranges = (
+            highs
+            -
+            lows
+        ).clip(
+            lower=0
         )
 
-        session_range = (
-            highs.tail(24).max()
-            - lows.tail(24).min()
+        average_range = float(
+            candle_ranges
+            .tail(
+                self.VOLUME_LOOKBACK
+            )
+            .mean()
         )
+
+        if (
+            not math.isfinite(
+                average_range
+            )
+            or average_range <= 0
+        ):
+
+            average_range = 0.01
 
         # ==================================================
         # ATR
+        # ==================================================
+
+        atr = float(
+            market.atr
+        )
+
+        if (
+            not math.isfinite(
+                atr
+            )
+            or atr < 0
+        ):
+
+            atr = 0.0
+
+        # ==================================================
+        # DAILY / SESSION / RECENT RANGE
+        # ==================================================
+
+        daily_range = float(
+            highs.max()
+            -
+            lows.min()
+        )
+
+        session_window = min(
+            24,
+            len(df)
+        )
+
+        session_range = float(
+            highs.tail(
+                session_window
+            ).max()
+            -
+            lows.tail(
+                session_window
+            ).min()
+        )
+
+        recent_window = min(
+            self.RECENT_RANGE_LOOKBACK,
+            len(df)
+        )
+
+        recent_high = float(
+            highs.tail(
+                recent_window
+            ).max()
+        )
+
+        recent_low = float(
+            lows.tail(
+                recent_window
+            ).min()
+        )
+
+        recent_range = (
+            recent_high
+            -
+            recent_low
+        )
+
+        # ==================================================
+        # ATR PERCENTILE PROXY
         # ==================================================
 
         atr_percentile = min(
@@ -133,105 +326,132 @@ class StatisticsService:
             max(
                 0,
                 int(
-                    market.atr * 20
+                    atr * 20
                 )
             )
         )
 
         # ==================================================
-        # VOLATILITY
+        # VOLATILITY PERCENTILE PROXY
         # ==================================================
 
-        volatility_percentile = min(
-            100,
-            max(
-                0,
-                int(
-                    (
-                        daily_range
-                        / last_close
-                    ) * 10000
+        volatility_percentile = 0
+
+        if last_close > 0:
+
+            volatility_percentile = min(
+                100,
+                max(
+                    0,
+                    int(
+                        (
+                            daily_range
+                            /
+                            last_close
+                        )
+                        * 10000
+                    )
                 )
             )
-        )
 
         # ==================================================
         # MOMENTUM
         # ==================================================
 
-        momentum_5 = (
-            last_close
-            - closes.iloc[-5]
-        )
+        momentum_5 = 0.0
 
-        momentum_10 = (
-            last_close
-            - closes.iloc[-10]
-        )
+        momentum_10 = 0.0
 
-        momentum_direction = "NEUTRAL"
+        if len(closes) > self.MOMENTUM_FAST_LOOKBACK:
+
+            momentum_5 = (
+                last_close
+                -
+                float(
+                    closes.iloc[
+                        -self.MOMENTUM_FAST_LOOKBACK
+                    ]
+                )
+            )
+
+        if len(closes) > self.MOMENTUM_SLOW_LOOKBACK:
+
+            momentum_10 = (
+                last_close
+                -
+                float(
+                    closes.iloc[
+                        -self.MOMENTUM_SLOW_LOOKBACK
+                    ]
+                )
+            )
 
         if momentum_5 > 0:
+
             momentum_direction = "BULLISH"
 
         elif momentum_5 < 0:
+
             momentum_direction = "BEARISH"
 
-        # ==================================================
-        # RECENT RANGE
-        # ==================================================
+        else:
 
-        recent_high = (
-            highs.tail(20).max()
-        )
-
-        recent_low = (
-            lows.tail(20).min()
-        )
-
-        recent_range = (
-            recent_high
-            - recent_low
-        )
+            momentum_direction = "NEUTRAL"
 
         # ==================================================
         # SUPPORT / RESISTANCE
         #
-        # Use recent market structure as dynamic SNR.
+        # Current candle is excluded from the calculation.
+        # This prevents the current price spike from
+        # redefining its own support / resistance.
         # ==================================================
 
-        support = float(
-            lows.tail(50).min()
+        snr_window = min(
+            self.SNR_LOOKBACK,
+            len(df) - 1
         )
+
+        historical_highs = highs.iloc[
+            -snr_window - 1:-1
+        ]
+
+        historical_lows = lows.iloc[
+            -snr_window - 1:-1
+        ]
 
         resistance = float(
-            highs.tail(50).max()
+            historical_highs.max()
+        )
+
+        support = float(
+            historical_lows.min()
         )
 
         # ==================================================
-        # DISTANCE TO SUPPORT / RESISTANCE
+        # DISTANCE TO SNR
         # ==================================================
 
-        distance_to_support = (
+        distance_to_support = max(
+            0.0,
             last_close
-            - support
+            -
+            support
         )
 
-        distance_to_resistance = (
+        distance_to_resistance = max(
+            0.0,
             resistance
-            - last_close
+            -
+            last_close
         )
 
         # ==================================================
         # SNR PROXIMITY
-        #
-        # Determines whether price is close enough to
-        # support/resistance to consider reversal.
         # ==================================================
 
         snr_threshold = max(
-            market.atr * 1.5,
-            1.0
+            atr * self.SNR_ATR_MULTIPLIER,
+            self.SNR_MIN_DISTANCE
         )
 
         near_support = (
@@ -245,10 +465,10 @@ class StatisticsService:
         )
 
         # ==================================================
-        # POSITION INSIDE RECENT RANGE
+        # RANGE POSITION
         #
-        # 0   = near support
-        # 100 = near resistance
+        # 0   = support
+        # 100 = resistance
         # ==================================================
 
         range_position = 50.0
@@ -258,257 +478,20 @@ class StatisticsService:
             range_position = (
                 (
                     last_close
-                    - recent_low
+                    -
+                    recent_low
                 )
-                / recent_range
+                /
+                recent_range
             ) * 100
 
         range_position = max(
-            0,
+            0.0,
             min(
-                100,
+                100.0,
                 range_position
             )
         )
-
-        # ==================================================
-        # OVEREXTENSION
-        #
-        # Detect whether price has moved unusually far
-        # from EMA100.
-        # ==================================================
-
-        distance_from_ema100 = (
-            last_close
-            - ema100
-        )
-
-        distance_from_ema100_abs = abs(
-            distance_from_ema100
-        )
-
-        overextended = (
-            distance_from_ema100_abs
-            >= max(
-                market.atr * 2.0,
-                2.0
-            )
-        )
-
-        overextended_direction = "NONE"
-
-        if overextended:
-
-            if distance_from_ema100 > 0:
-
-                overextended_direction = "UP"
-
-            elif distance_from_ema100 < 0:
-
-                overextended_direction = "DOWN"
-
-        # ==================================================
-        # CANDLE ANALYSIS
-        # ==================================================
-
-        candle_open = float(
-            df["open"].iloc[-1]
-        )
-
-        candle_body = abs(
-            last_close
-            - candle_open
-        )
-
-        upper_wick = (
-            last_high
-            - max(
-                candle_open,
-                last_close
-            )
-        )
-
-        lower_wick = (
-            min(
-                candle_open,
-                last_close
-            )
-            - last_low
-        )
-
-        candle_range = (
-            last_high
-            - last_low
-        )
-
-        bullish_rejection = False
-        bearish_rejection = False
-
-        if candle_range > 0:
-
-            bullish_rejection = (
-                lower_wick
-                >= candle_body * 1.5
-                and lower_wick
-                >= candle_range * 0.30
-            )
-
-            bearish_rejection = (
-                upper_wick
-                >= candle_body * 1.5
-                and upper_wick
-                >= candle_range * 0.30
-            )
-
-        # ==================================================
-        # VOLUME ANALYSIS
-        # ==================================================
-
-        current_volume = float(
-            volumes.iloc[-1]
-        )
-
-        average_volume = float(
-            volumes.tail(20).mean()
-        )
-
-        volume_ratio = 0.0
-
-        if average_volume > 0:
-
-            volume_ratio = (
-                current_volume
-                / average_volume
-            )
-
-        volume_spike = (
-            volume_ratio >= 1.30
-        )
-
-        # ==================================================
-        # REVERSAL SIGNAL
-        #
-        # This does NOT automatically generate BUY/SELL.
-        # It only gives AI Trader evidence.
-        # ==================================================
-
-        reversal_direction = "NONE"
-
-        reversal_strength = 0
-
-        # ----------------------------------------------
-        # Bullish reversal
-        # ----------------------------------------------
-
-        if (
-            near_support
-            and bullish_rejection
-        ):
-
-            reversal_direction = "BUY"
-
-            reversal_strength += 40
-
-        if (
-            near_support
-            and momentum_5 > 0
-        ):
-
-            reversal_direction = "BUY"
-
-            reversal_strength += 20
-
-        if (
-            overextended_direction == "DOWN"
-            and bullish_rejection
-        ):
-
-            reversal_direction = "BUY"
-
-            reversal_strength += 25
-
-        # ----------------------------------------------
-        # Bearish reversal
-        # ----------------------------------------------
-
-        if (
-            near_resistance
-            and bearish_rejection
-        ):
-
-            reversal_direction = "SELL"
-
-            reversal_strength += 40
-
-        if (
-            near_resistance
-            and momentum_5 < 0
-        ):
-
-            reversal_direction = "SELL"
-
-            reversal_strength += 20
-
-        if (
-            overextended_direction == "UP"
-            and bearish_rejection
-        ):
-
-            reversal_direction = "SELL"
-
-            reversal_strength += 25
-
-        # Volume confirmation
-
-        if (
-            reversal_direction != "NONE"
-            and volume_spike
-        ):
-
-            reversal_strength += 15
-
-        reversal_strength = min(
-            100,
-            reversal_strength
-        )
-
-        # ==================================================
-        # POTENTIAL 1000 POINT MOVE
-        #
-        # XAUUSD point conversion is deliberately kept
-        # simple here. AI Trader receives the raw price
-        # movement and can evaluate the opportunity.
-        # ==================================================
-
-        target_distance = 1.0
-
-        buy_target = (
-            last_close
-            + target_distance
-        )
-
-        sell_target = (
-            last_close
-            - target_distance
-        )
-
-        buy_target_possible = (
-            resistance
-            - last_close
-            >= target_distance
-        )
-
-        sell_target_possible = (
-            last_close
-            - support
-            >= target_distance
-        )
-
-        # ==================================================
-        # MARKET LOCATION
-        # ==================================================
-
-        market_location = "MID_RANGE"
 
         if range_position <= 20:
 
@@ -518,15 +501,394 @@ class StatisticsService:
 
             market_location = "NEAR_RESISTANCE"
 
+        else:
+
+            market_location = "MID_RANGE"
+
         # ==================================================
-        # FINAL STATISTICS
+        # OVEREXTENSION
+        # ==================================================
+
+        distance_from_ema100 = (
+            last_close
+            -
+            ema100
+        )
+
+        distance_from_ema100_abs = abs(
+            distance_from_ema100
+        )
+
+        overextension_threshold = max(
+            atr * self.OVEREXTENSION_ATR_MULTIPLIER,
+            self.OVEREXTENSION_MIN_DISTANCE
+        )
+
+        overextended = (
+            distance_from_ema100_abs
+            >= overextension_threshold
+        )
+
+        if not overextended:
+
+            overextended_direction = "NONE"
+
+        elif distance_from_ema100 > 0:
+
+            overextended_direction = "UP"
+
+        else:
+
+            overextended_direction = "DOWN"
+
+        # ==================================================
+        # CURRENT CANDLE
+        # ==================================================
+
+        candle_body = abs(
+            last_close
+            -
+            last_open
+        )
+
+        candle_range = max(
+            0.0,
+            last_high
+            -
+            last_low
+        )
+
+        upper_wick = max(
+            0.0,
+            last_high
+            -
+            max(
+                last_open,
+                last_close
+            )
+        )
+
+        lower_wick = max(
+            0.0,
+            min(
+                last_open,
+                last_close
+            )
+            -
+            last_low
+        )
+
+        # ==================================================
+        # REJECTION
+        # ==================================================
+
+        bullish_rejection = False
+
+        bearish_rejection = False
+
+        if candle_range > 0:
+
+            bullish_rejection = (
+                lower_wick
+                >=
+                max(
+                    candle_body
+                    *
+                    self.REJECTION_WICK_BODY_RATIO,
+                    candle_range
+                    *
+                    self.REJECTION_RANGE_RATIO
+                )
+            )
+
+            bearish_rejection = (
+                upper_wick
+                >=
+                max(
+                    candle_body
+                    *
+                    self.REJECTION_WICK_BODY_RATIO,
+                    candle_range
+                    *
+                    self.REJECTION_RANGE_RATIO
+                )
+            )
+
+        # ==================================================
+        # VOLUME
+        # ==================================================
+
+        current_volume = float(
+            volumes.iloc[-1]
+        )
+
+        average_volume = float(
+            volumes.tail(
+                self.VOLUME_LOOKBACK
+            ).mean()
+        )
+
+        volume_ratio = 0.0
+
+        if average_volume > 0:
+
+            volume_ratio = (
+                current_volume
+                /
+                average_volume
+            )
+
+        volume_spike = (
+            volume_ratio
+            >= self.VOLUME_SPIKE_RATIO
+        )
+
+        # ==================================================
+        # RECENT PRICE MOVEMENT
+        # ==================================================
+
+        movement_lookback = min(
+            10,
+            len(df) - 1
+        )
+
+        previous_close = float(
+            closes.iloc[
+                -1 - movement_lookback
+            ]
+        )
+
+        recent_move = (
+            last_close
+            -
+            previous_close
+        )
+
+        recent_move_abs = abs(
+            recent_move
+        )
+
+        movement_strength = (
+            recent_move_abs
+            /
+            average_range
+        )
+
+        sharp_up_move = (
+            recent_move > 0
+            and
+            movement_strength
+            >= self.SHARP_MOVE_MULTIPLIER
+        )
+
+        sharp_down_move = (
+            recent_move < 0
+            and
+            movement_strength
+            >= self.SHARP_MOVE_MULTIPLIER
+        )
+
+        # ==================================================
+        # REVERSAL EVIDENCE
+        #
+        # A reversal requires:
+        #
+        # BUY:
+        #   1. Sharp downward expansion
+        #   2. Price near support OR overextended down
+        #   3. Bullish rejection
+        #
+        # SELL:
+        #   1. Sharp upward expansion
+        #   2. Price near resistance OR overextended up
+        #   3. Bearish rejection
+        #
+        # Volume strengthens the setup but does not create
+        # a reversal by itself.
+        # ==================================================
+
+        bullish_reversal_evidence = 0
+
+        bearish_reversal_evidence = 0
+
+        if sharp_down_move:
+
+            bullish_reversal_evidence += 30
+
+        if near_support:
+
+            bullish_reversal_evidence += 25
+
+        if overextended_direction == "DOWN":
+
+            bullish_reversal_evidence += 20
+
+        if bullish_rejection:
+
+            bullish_reversal_evidence += 25
+
+        if volume_spike:
+
+            bullish_reversal_evidence += 10
+
+        if sharp_up_move:
+
+            bearish_reversal_evidence += 30
+
+        if near_resistance:
+
+            bearish_reversal_evidence += 25
+
+        if overextended_direction == "UP":
+
+            bearish_reversal_evidence += 20
+
+        if bearish_rejection:
+
+            bearish_reversal_evidence += 25
+
+        if volume_spike:
+
+            bearish_reversal_evidence += 10
+
+        bullish_reversal_evidence = min(
+            100,
+            bullish_reversal_evidence
+        )
+
+        bearish_reversal_evidence = min(
+            100,
+            bearish_reversal_evidence
+        )
+
+        # ==================================================
+        # REVERSAL VALIDATION
+        #
+        # Do not classify a candle as reversal merely
+        # because it is large.
+        #
+        # Minimum structure:
+        #   sharp move
+        #   + rejection
+        #   + location / extension
+        # ==================================================
+
+        bullish_reversal = (
+            (
+                sharp_down_move
+                and
+                bullish_rejection
+                and
+                (
+                    near_support
+                    or
+                    overextended_direction == "DOWN"
+                )
+            )
+        )
+
+        bearish_reversal = (
+            (
+                sharp_up_move
+                and
+                bearish_rejection
+                and
+                (
+                    near_resistance
+                    or
+                    overextended_direction == "UP"
+                )
+            )
+        )
+
+        # ==================================================
+        # REVERSAL DIRECTION
+        # ==================================================
+
+        if (
+            bullish_reversal
+            and
+            not bearish_reversal
+        ):
+
+            reversal_direction = "BUY"
+
+            reversal_strength = (
+                bullish_reversal_evidence
+            )
+
+        elif (
+            bearish_reversal
+            and
+            not bullish_reversal
+        ):
+
+            reversal_direction = "SELL"
+
+            reversal_strength = (
+                bearish_reversal_evidence
+            )
+
+        elif (
+            bullish_reversal
+            and
+            bearish_reversal
+        ):
+
+            # Conflicting reversal evidence.
+            # Do not force a direction.
+
+            reversal_direction = "NONE"
+
+            reversal_strength = 0
+
+        else:
+
+            reversal_direction = "NONE"
+
+            reversal_strength = 0
+
+        # ==================================================
+        # TREND / REVERSAL CONTEXT
+        # ==================================================
+
+        trend_alignment = (
+            trend != "SIDEWAYS"
+        )
+
+        # ==================================================
+        # TARGET ANALYTICS
+        #
+        # The execution layer remains the source of truth
+        # for actual TP/SL distances.
+        #
+        # These fields represent available room toward
+        # the current structural S/R levels only.
+        # ==================================================
+
+        buy_room = max(
+            0.0,
+            resistance
+            -
+            last_close
+        )
+
+        sell_room = max(
+            0.0,
+            last_close
+            -
+            support
+        )
+
+        # ==================================================
+        # FINAL RESULT
         # ==================================================
 
         return {
 
-            # ------------------------------------------
+            # ----------------------------------------------
             # RANGE / VOLATILITY
-            # ------------------------------------------
+            # ----------------------------------------------
 
             "daily_range": round(
                 daily_range,
@@ -544,7 +906,7 @@ class StatisticsService:
             ),
 
             "atr": round(
-                market.atr,
+                atr,
                 5
             ),
 
@@ -556,9 +918,9 @@ class StatisticsService:
                 volatility_percentile
             ),
 
-            # ------------------------------------------
+            # ----------------------------------------------
             # EMA / TREND
-            # ------------------------------------------
+            # ----------------------------------------------
 
             "ema5": round(
                 ema5,
@@ -581,9 +943,13 @@ class StatisticsService:
                 trend_strength
             ),
 
-            # ------------------------------------------
+            "trend_alignment": (
+                trend_alignment
+            ),
+
+            # ----------------------------------------------
             # MOMENTUM
-            # ------------------------------------------
+            # ----------------------------------------------
 
             "momentum": round(
                 momentum_5,
@@ -604,9 +970,9 @@ class StatisticsService:
                 momentum_direction
             ),
 
-            # ------------------------------------------
-            # SNR
-            # ------------------------------------------
+            # ----------------------------------------------
+            # SUPPORT / RESISTANCE
+            # ----------------------------------------------
 
             "support": round(
                 support,
@@ -645,9 +1011,9 @@ class StatisticsService:
                 market_location
             ),
 
-            # ------------------------------------------
+            # ----------------------------------------------
             # OVEREXTENSION
-            # ------------------------------------------
+            # ----------------------------------------------
 
             "distance_from_ema100": round(
                 distance_from_ema100,
@@ -662,9 +1028,18 @@ class StatisticsService:
                 overextended_direction
             ),
 
-            # ------------------------------------------
+            "extension_ratio": round(
+                (
+                    distance_from_ema100_abs
+                    /
+                    average_range
+                ),
+                2
+            ),
+
+            # ----------------------------------------------
             # CANDLE
-            # ------------------------------------------
+            # ----------------------------------------------
 
             "candle_body": round(
                 candle_body,
@@ -694,9 +1069,9 @@ class StatisticsService:
                 bearish_rejection
             ),
 
-            # ------------------------------------------
+            # ----------------------------------------------
             # VOLUME
-            # ------------------------------------------
+            # ----------------------------------------------
 
             "current_volume": round(
                 current_volume,
@@ -717,9 +1092,39 @@ class StatisticsService:
                 volume_spike
             ),
 
-            # ------------------------------------------
+            # ----------------------------------------------
+            # MOVEMENT
+            # ----------------------------------------------
+
+            "recent_move": round(
+                recent_move,
+                2
+            ),
+
+            "movement_strength": round(
+                movement_strength,
+                2
+            ),
+
+            "sharp_up_move": (
+                sharp_up_move
+            ),
+
+            "sharp_down_move": (
+                sharp_down_move
+            ),
+
+            # ----------------------------------------------
             # REVERSAL
-            # ------------------------------------------
+            # ----------------------------------------------
+
+            "bullish_reversal": (
+                bullish_reversal
+            ),
+
+            "bearish_reversal": (
+                bearish_reversal
+            ),
 
             "reversal_direction": (
                 reversal_direction
@@ -729,35 +1134,31 @@ class StatisticsService:
                 reversal_strength
             ),
 
-            # ------------------------------------------
-            # 1000 POINT OPPORTUNITY
-            # ------------------------------------------
-
-            "target_distance": (
-                target_distance
+            "bullish_reversal_evidence": (
+                bullish_reversal_evidence
             ),
 
-            "buy_target": round(
-                buy_target,
+            "bearish_reversal_evidence": (
+                bearish_reversal_evidence
+            ),
+
+            # ----------------------------------------------
+            # STRUCTURAL ROOM
+            # ----------------------------------------------
+
+            "buy_room": round(
+                buy_room,
                 2
             ),
 
-            "sell_target": round(
-                sell_target,
+            "sell_room": round(
+                sell_room,
                 2
             ),
 
-            "buy_target_possible": (
-                buy_target_possible
-            ),
-
-            "sell_target_possible": (
-                sell_target_possible
-            ),
-
-            # ------------------------------------------
+            # ----------------------------------------------
             # CURRENT PRICE
-            # ------------------------------------------
+            # ----------------------------------------------
 
             "last_close": round(
                 last_close,

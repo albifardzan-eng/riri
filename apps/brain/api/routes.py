@@ -58,6 +58,28 @@ execution_service = ExecutionService()
 TRADE_COOLDOWN_SECONDS = 30 * 60
 
 
+# ==================================================
+# SIGNAL DELIVERY LOCK
+# ==================================================
+#
+# Prevent the same pending signal from being delivered
+# repeatedly to MT5 before confirmation.
+#
+# IMPORTANT:
+# This does NOT replace execution confirmation.
+# The signal remains stored until /execution/confirm.
+#
+# delivered_signal_id prevents the polling executor from
+# receiving the exact same signal repeatedly.
+#
+
+delivered_signal_id = None
+
+
+# ==================================================
+# HELPERS
+# ==================================================
+
 def get_trade_cooldown_status(
     positions,
     symbol
@@ -71,16 +93,13 @@ def get_trade_cooldown_status(
         -> AI Trader allowed
 
     1 active trade
-        -> wait 30 minutes from trade #1 open_time
+        -> wait 30 minutes from latest trade
 
     2 active trades
-        -> wait 30 minutes from trade #2 open_time
+        -> wait 30 minutes from latest trade
 
     3 active trades
-        -> AI Trader must NOT be called
-
-    Cooldown is based on the most recently opened
-    active trade.
+        -> AI Trader NOT allowed
     """
 
     active_positions = [
@@ -128,12 +147,7 @@ def get_trade_cooldown_status(
     ]
 
     # ==================================================
-    # SAFETY:
-    # If MT5 does not provide open_time,
-    # do NOT block the system indefinitely.
-    #
-    # Existing positions with unknown open_time
-    # cannot be reliably used to calculate cooldown.
+    # SAFETY
     # ==================================================
 
     if not valid_open_times:
@@ -187,6 +201,20 @@ def get_trade_cooldown_status(
     }
 
 
+def serialize_model(value):
+    """
+    Safely serialize Pydantic models.
+    """
+
+    if value is None:
+        return None
+
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+
+    return value
+
+
 # ==================================================
 # HEALTH
 # ==================================================
@@ -224,6 +252,8 @@ async def status():
 async def receive_market_data(
     data: MarketData
 ):
+
+    global delivered_signal_id
 
     # ==================================================
     # STORE MARKET
@@ -284,41 +314,18 @@ async def receive_market_data(
     # ==================================================
 
     decision = None
-
     risk = None
-
     execution = None
-
     journal_record = None
 
     # ==================================================
     # SCORE QUALIFICATION
-    #
-    # Score < MIN_SCORE:
-    # Do NOT call AI Trader.
     # ==================================================
 
     if score.qualified:
 
         # ==================================================
-        # TRADE COOLDOWN / ACTIVE TRADE CONTROL
-        #
-        # IMPORTANT:
-        # This check happens BEFORE AI Trader.
-        #
-        # Therefore AI Trader will NOT be called when:
-        #
-        # 1. There are already 3 active trades
-        # 2. The latest active trade is less than
-        #    30 minutes old
-        #
-        # Example:
-        #
-        # Trade #1 opened 10:00
-        # AI Trader cannot be called again before 10:30
-        #
-        # Trade #2 opened 10:35
-        # AI Trader cannot be called again before 11:05
+        # ACTIVE TRADE / COOLDOWN CONTROL
         # ==================================================
 
         cooldown = (
@@ -367,14 +374,12 @@ async def receive_market_data(
 
                         "candles": [
                             candle.model_dump()
-                            for candle
-                            in data.candles
+                            for candle in data.candles
                         ],
 
                         "positions": [
                             position.model_dump()
-                            for position
-                            in data.positions
+                            for position in data.positions
                         ]
                     },
 
@@ -387,7 +392,7 @@ async def receive_market_data(
             )
 
             # ==================================================
-            # STORE AI DECISION
+            # STORE DECISION
             # ==================================================
 
             market_store.update_decision(
@@ -440,7 +445,7 @@ async def receive_market_data(
                 data.symbol,
 
                 "score":
-                score.model_dump(),
+                serialize_model(score),
 
                 "statistics":
                 statistics,
@@ -452,25 +457,13 @@ async def receive_market_data(
                 pattern,
 
                 "decision":
-                (
-                    decision.model_dump()
-                    if decision
-                    else None
-                ),
+                serialize_model(decision),
 
                 "risk":
-                (
-                    risk.model_dump()
-                    if risk
-                    else None
-                ),
+                serialize_model(risk),
 
                 "execution":
-                (
-                    execution.model_dump()
-                    if execution
-                    else None
-                )
+                serialize_model(execution)
             }
 
             trade_journal.write(
@@ -481,13 +474,26 @@ async def receive_market_data(
                 journal_record
             )
 
-        else:
-
             # ==================================================
-            # COOLDOWN / MAX TRADE
+            # NEW SIGNAL CREATED
             #
-            # AI Trader is NOT called.
+            # Reset delivery lock only when a genuinely new
+            # execution signal exists.
             # ==================================================
+
+            if execution is not None:
+
+                execution_signal_id = getattr(
+                    execution,
+                    "signal_id",
+                    None
+                )
+
+                if execution_signal_id:
+
+                    delivered_signal_id = None
+
+        else:
 
             logger.info(
                 f"AI Trader skipped: "
@@ -504,7 +510,6 @@ async def receive_market_data(
 
     await manager.broadcast(
         {
-
             "type":
             "market_update",
 
@@ -512,7 +517,7 @@ async def receive_market_data(
             data.model_dump(),
 
             "score":
-            score.model_dump(),
+            serialize_model(score),
 
             "statistics":
             statistics,
@@ -524,25 +529,13 @@ async def receive_market_data(
             pattern,
 
             "decision":
-            (
-                decision.model_dump()
-                if decision
-                else None
-            ),
+            serialize_model(decision),
 
             "risk":
-            (
-                risk.model_dump()
-                if risk
-                else None
-            ),
+            serialize_model(risk),
 
             "execution":
-            (
-                execution.model_dump()
-                if execution
-                else None
-            )
+            serialize_model(execution)
         }
     )
 
@@ -577,25 +570,13 @@ async def receive_market_data(
         score.qualified,
 
         "decision":
-        (
-            decision.model_dump()
-            if decision
-            else None
-        ),
+        serialize_model(decision),
 
         "risk":
-        (
-            risk.model_dump()
-            if risk
-            else None
-        ),
+        serialize_model(risk),
 
         "execution":
-        (
-            execution.model_dump()
-            if execution
-            else None
-        )
+        serialize_model(execution)
     }
 
 
@@ -807,9 +788,15 @@ async def journal_history():
 @router.get("/execution/pending")
 async def execution_pending():
 
+    global delivered_signal_id
+
     signal = (
         signal_store.get_signal()
     )
+
+    # ==================================================
+    # NO SIGNAL
+    # ==================================================
 
     if signal is None:
 
@@ -817,6 +804,44 @@ async def execution_pending():
             "signal":
             None
         }
+
+    # ==================================================
+    # SIGNAL ID
+    # ==================================================
+
+    signal_id = signal.get(
+        "signal_id"
+    )
+
+    # ==================================================
+    # DUPLICATE DELIVERY PROTECTION
+    #
+    # The same signal must never be returned repeatedly
+    # while MT5 is polling the endpoint.
+    # ==================================================
+
+    if (
+        signal_id
+        and
+        delivered_signal_id == signal_id
+    ):
+
+        return {
+            "signal":
+            None
+        }
+
+    # ==================================================
+    # MARK AS DELIVERED
+    # ==================================================
+
+    if signal_id:
+
+        delivered_signal_id = signal_id
+
+    logger.info(
+        f"[SIGNAL] Delivered signal_id={signal_id}"
+    )
 
     return {
         "signal":
@@ -833,15 +858,89 @@ async def execution_confirm(
     payload: dict
 ):
 
+    global delivered_signal_id
+
+    # ==================================================
+    # EXTRACT SIGNAL ID
+    # ==================================================
+
+    signal_id = payload.get(
+        "signal_id"
+    )
+
+    # ==================================================
+    # CURRENT SIGNAL
+    # ==================================================
+
+    current_signal = (
+        signal_store.get_signal()
+    )
+
+    current_signal_id = (
+        current_signal.get("signal_id")
+        if current_signal
+        else None
+    )
+
+    # ==================================================
+    # JOURNAL EXECUTION
+    # ==================================================
+
     trade_journal.add(
         payload
     )
 
-    signal_store.clear()
+    # ==================================================
+    # CLEAR ONLY THE CONFIRMED SIGNAL
+    #
+    # Never clear a different/newer signal accidentally.
+    # ==================================================
+
+    if (
+        signal_id
+        and
+        current_signal_id
+        and
+        signal_id == current_signal_id
+    ):
+
+        signal_store.clear()
+
+        delivered_signal_id = None
+
+        logger.info(
+            f"[SIGNAL] Confirmed and cleared "
+            f"signal_id={signal_id}"
+        )
+
+    elif (
+        signal_id
+        and
+        current_signal_id is None
+    ):
+
+        delivered_signal_id = None
+
+        logger.info(
+            f"[SIGNAL] Confirmation received "
+            f"for signal_id={signal_id}; "
+            f"signal already cleared"
+        )
+
+    else:
+
+        logger.warning(
+            f"[SIGNAL] Confirmation mismatch "
+            f"received={signal_id} "
+            f"current={current_signal_id}"
+        )
 
     return {
         "success":
-        True
+        True,
+
+        "signal_id":
+        signal_id
     }
 
 
