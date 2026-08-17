@@ -1,9 +1,14 @@
 from fastapi import APIRouter
+import time
 
 from models.status import StatusResponse
 from models.market_data import MarketData
 
 from config.settings import settings
+from config.trading_config import (
+    MIN_SCORE,
+    MAX_ACTIVE_TRADES
+)
 
 from services.market_store import market_store
 from services.execution_service import ExecutionService
@@ -44,6 +49,142 @@ ai_trader = AITrader()
 ai_risk = AIRisk()
 
 execution_service = ExecutionService()
+
+
+# ==================================================
+# TRADE COOLDOWN
+# ==================================================
+
+TRADE_COOLDOWN_SECONDS = 30 * 60
+
+
+def get_trade_cooldown_status(
+    positions,
+    symbol
+):
+    """
+    Determine whether AI Trader is allowed to be called.
+
+    Rules:
+
+    0 active trades
+        -> AI Trader allowed
+
+    1 active trade
+        -> wait 30 minutes from trade #1 open_time
+
+    2 active trades
+        -> wait 30 minutes from trade #2 open_time
+
+    3 active trades
+        -> AI Trader must NOT be called
+
+    Cooldown is based on the most recently opened
+    active trade.
+    """
+
+    active_positions = [
+        position
+        for position in positions
+        if position.symbol == symbol
+    ]
+
+    active_trade_count = len(
+        active_positions
+    )
+
+    # ==================================================
+    # MAX ACTIVE TRADES
+    # ==================================================
+
+    if active_trade_count >= MAX_ACTIVE_TRADES:
+
+        return {
+            "allowed": False,
+            "reason": "MAX_ACTIVE_TRADES",
+            "remaining_seconds": 0
+        }
+
+    # ==================================================
+    # NO ACTIVE TRADE
+    # ==================================================
+
+    if active_trade_count == 0:
+
+        return {
+            "allowed": True,
+            "reason": "NO_ACTIVE_TRADES",
+            "remaining_seconds": 0
+        }
+
+    # ==================================================
+    # FIND MOST RECENT OPEN TRADE
+    # ==================================================
+
+    valid_open_times = [
+        int(position.open_time)
+        for position in active_positions
+        if position.open_time > 0
+    ]
+
+    # ==================================================
+    # SAFETY:
+    # If MT5 does not provide open_time,
+    # do NOT block the system indefinitely.
+    #
+    # Existing positions with unknown open_time
+    # cannot be reliably used to calculate cooldown.
+    # ==================================================
+
+    if not valid_open_times:
+
+        return {
+            "allowed": True,
+            "reason": "OPEN_TIME_UNAVAILABLE",
+            "remaining_seconds": 0
+        }
+
+    latest_open_time = max(
+        valid_open_times
+    )
+
+    now = int(
+        time.time()
+    )
+
+    elapsed_seconds = (
+        now -
+        latest_open_time
+    )
+
+    remaining_seconds = max(
+        0,
+        TRADE_COOLDOWN_SECONDS -
+        elapsed_seconds
+    )
+
+    # ==================================================
+    # COOLDOWN ACTIVE
+    # ==================================================
+
+    if remaining_seconds > 0:
+
+        return {
+            "allowed": False,
+            "reason": "TRADE_COOLDOWN",
+            "remaining_seconds":
+                remaining_seconds
+        }
+
+    # ==================================================
+    # COOLDOWN COMPLETE
+    # ==================================================
+
+    return {
+        "allowed": True,
+        "reason": "COOLDOWN_COMPLETE",
+        "remaining_seconds": 0
+    }
 
 
 # ==================================================
@@ -160,155 +301,202 @@ async def receive_market_data(
     if score.qualified:
 
         # ==================================================
-        # AI TRADER
+        # TRADE COOLDOWN / ACTIVE TRADE CONTROL
+        #
+        # IMPORTANT:
+        # This check happens BEFORE AI Trader.
+        #
+        # Therefore AI Trader will NOT be called when:
+        #
+        # 1. There are already 3 active trades
+        # 2. The latest active trade is less than
+        #    30 minutes old
+        #
+        # Example:
+        #
+        # Trade #1 opened 10:00
+        # AI Trader cannot be called again before 10:30
+        #
+        # Trade #2 opened 10:35
+        # AI Trader cannot be called again before 11:05
         # ==================================================
 
-        decision = (
-            await ai_trader.decide(
-
-                market={
-                    "symbol":
-                    data.symbol,
-
-                    "bid":
-                    data.bid,
-
-                    "ask":
-                    data.ask,
-
-                    "spread":
-                    data.spread,
-
-                    "atr":
-                    data.atr,
-
-                    "tick_volume":
-                    data.tick_volume,
-
-                    "balance":
-                    data.balance,
-
-                    "equity":
-                    data.equity,
-
-                    "free_margin":
-                    data.free_margin,
-
-                    "candles": [
-                        candle.model_dump()
-                        for candle
-                        in data.candles
-                    ],
-
-                    "positions": [
-                        position.model_dump()
-                        for position
-                        in data.positions
-                    ]
-                },
-
-                statistics=statistics,
-
-                fundamental=fundamental,
-
-                pattern=pattern
+        cooldown = (
+            get_trade_cooldown_status(
+                positions=data.positions,
+                symbol=data.symbol
             )
         )
 
-        # ==================================================
-        # STORE AI DECISION
-        # ==================================================
+        if cooldown["allowed"]:
 
-        market_store.update_decision(
-            decision
-        )
+            # ==================================================
+            # AI TRADER
+            # ==================================================
 
-        # ==================================================
-        # AI RISK
-        # ==================================================
+            decision = (
+                await ai_trader.decide(
 
-        risk = (
-            await ai_risk.evaluate(
+                    market={
+                        "symbol":
+                        data.symbol,
 
-                market=data,
+                        "bid":
+                        data.bid,
 
-                trader_decision=decision
+                        "ask":
+                        data.ask,
+
+                        "spread":
+                        data.spread,
+
+                        "atr":
+                        data.atr,
+
+                        "tick_volume":
+                        data.tick_volume,
+
+                        "balance":
+                        data.balance,
+
+                        "equity":
+                        data.equity,
+
+                        "free_margin":
+                        data.free_margin,
+
+                        "candles": [
+                            candle.model_dump()
+                            for candle
+                            in data.candles
+                        ],
+
+                        "positions": [
+                            position.model_dump()
+                            for position
+                            in data.positions
+                        ]
+                    },
+
+                    statistics=statistics,
+
+                    fundamental=fundamental,
+
+                    pattern=pattern
+                )
             )
-        )
 
-        market_store.update_risk(
-            risk
-        )
+            # ==================================================
+            # STORE AI DECISION
+            # ==================================================
 
-        # ==================================================
-        # EXECUTION
-        # ==================================================
-
-        execution = (
-            await execution_service.execute(
-
-                decision=decision,
-
-                risk=risk,
-
-                market=data
+            market_store.update_decision(
+                decision
             )
-        )
 
-        market_store.update_execution(
-            execution
-        )
+            # ==================================================
+            # AI RISK
+            # ==================================================
 
-        # ==================================================
-        # JOURNAL
-        # ==================================================
+            risk = (
+                await ai_risk.evaluate(
 
-        journal_record = {
+                    market=data,
 
-            "symbol":
-            data.symbol,
-
-            "score":
-            score.model_dump(),
-
-            "statistics":
-            statistics,
-
-            "fundamental":
-            fundamental,
-
-            "pattern":
-            pattern,
-
-            "decision":
-            (
-                decision.model_dump()
-                if decision
-                else None
-            ),
-
-            "risk":
-            (
-                risk.model_dump()
-                if risk
-                else None
-            ),
-
-            "execution":
-            (
-                execution.model_dump()
-                if execution
-                else None
+                    trader_decision=decision
+                )
             )
-        }
 
-        trade_journal.write(
-            journal_record
-        )
+            market_store.update_risk(
+                risk
+            )
 
-        market_store.update_journal(
-            journal_record
-        )
+            # ==================================================
+            # EXECUTION
+            # ==================================================
+
+            execution = (
+                await execution_service.execute(
+
+                    decision=decision,
+
+                    risk=risk,
+
+                    market=data
+                )
+            )
+
+            market_store.update_execution(
+                execution
+            )
+
+            # ==================================================
+            # JOURNAL
+            # ==================================================
+
+            journal_record = {
+
+                "symbol":
+                data.symbol,
+
+                "score":
+                score.model_dump(),
+
+                "statistics":
+                statistics,
+
+                "fundamental":
+                fundamental,
+
+                "pattern":
+                pattern,
+
+                "decision":
+                (
+                    decision.model_dump()
+                    if decision
+                    else None
+                ),
+
+                "risk":
+                (
+                    risk.model_dump()
+                    if risk
+                    else None
+                ),
+
+                "execution":
+                (
+                    execution.model_dump()
+                    if execution
+                    else None
+                )
+            }
+
+            trade_journal.write(
+                journal_record
+            )
+
+            market_store.update_journal(
+                journal_record
+            )
+
+        else:
+
+            # ==================================================
+            # COOLDOWN / MAX TRADE
+            #
+            # AI Trader is NOT called.
+            # ==================================================
+
+            logger.info(
+                f"AI Trader skipped: "
+                f"reason={cooldown['reason']} "
+                f"remaining="
+                f"{cooldown['remaining_seconds']}s "
+                f"active_trades="
+                f"{len(data.positions)}"
+            )
 
     # ==================================================
     # WEBSOCKET

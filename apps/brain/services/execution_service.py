@@ -101,9 +101,33 @@ class ExecutionService:
             )
 
         # ==================================================
-        # EQUITY BASED LOT MANAGEMENT
+        # MAX ACTIVE TRADES
         #
-        # FINAL RIRI RULE:
+        # This is also enforced here as a second layer
+        # of protection.
+        # ==================================================
+
+        active_positions = [
+            position
+            for position in market.positions
+            if position.symbol == market.symbol
+        ]
+
+        active_trade_count = len(
+            active_positions
+        )
+
+        if active_trade_count >= 3:
+
+            return ExecutionResult(
+                executed=False,
+                order_type="NONE",
+                lot=0.0,
+                reason="MAX_ACTIVE_TRADES"
+            )
+
+        # ==================================================
+        # EQUITY BASED LOT MANAGEMENT
         #
         # < $500
         #     -> 0.01
@@ -172,7 +196,7 @@ class ExecutionService:
 
         active_lot = sum(
             float(position.lot)
-            for position in market.positions
+            for position in active_positions
         )
 
         active_lot = round(

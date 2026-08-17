@@ -101,7 +101,7 @@ class AIRisk:
         # MINIMUM ENTRY INTERVAL
         #
         # Existing newest position must be at least
-        # 1 hour old before a new position is allowed.
+        # 30 minutes old before a new position is allowed.
         # ==================================================
 
         if active_trades > 0:
