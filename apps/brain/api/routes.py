@@ -288,8 +288,10 @@ async def receive_market_data(
     )
 
     fundamental = (
-        await fundamental_service.analyze()
+        await fundamental_service.analyze(
+            data.fundamental
     )
+)
 
     pattern = (
         pattern_service.analyze(

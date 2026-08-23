@@ -72,6 +72,394 @@ FUNDAMENTAL
 {fundamental}
 
 ==================================================
+FUNDAMENTAL ANALYSIS
+==================================================
+
+Fundamental information is a critical contextual input
+for XAUUSD decision making.
+
+Use ONLY the fundamental information supplied in the
+FUNDAMENTAL section.
+
+Do NOT invent, assume, or retrieve external fundamental
+information that is not supplied.
+
+The fundamental data may contain:
+
+- high_impact_news
+- news_state
+- pre_news_risk
+- post_news_analysis
+- event
+- currency
+- impact
+- phase
+- actual
+- forecast
+- previous
+- surprise_direction
+- surprise_strength
+- inflation_event
+- employment_event
+- central_bank_event
+- growth_event
+- usd_bias
+- gold_bias
+- fundamental_confidence
+- news_score
+- score
+
+Treat these fields as contextual evidence, not as
+automatic trading signals.
+
+==================================================
+FUNDAMENTAL DIRECTION
+==================================================
+
+For XAUUSD, evaluate the supplied fundamental direction
+primarily through:
+
+1. USD bias
+2. Gold bias
+3. Economic surprise
+4. Event type
+5. Actual vs forecast
+6. Previous value
+7. Event timing
+8. Fundamental confidence
+9. News risk
+
+When supplied data indicates:
+
+gold_bias = BULLISH
+    -> fundamental evidence supports BUY.
+
+gold_bias = BEARISH
+    -> fundamental evidence supports SELL.
+
+gold_bias = NEUTRAL
+    -> fundamental direction provides no meaningful
+       directional advantage.
+
+usd_bias = BULLISH
+    -> generally bearish for XAUUSD.
+
+usd_bias = BEARISH
+    -> generally bullish for XAUUSD.
+
+However, these relationships are contextual.
+
+Do NOT automatically enter a trade solely because
+gold_bias or usd_bias has a directional value.
+
+==================================================
+ECONOMIC SURPRISE
+==================================================
+
+When actual and forecast values are available, explicitly
+evaluate the economic surprise.
+
+Consider:
+
+actual > forecast
+actual < forecast
+actual approximately equal to forecast
+
+Also consider:
+
+previous
+
+and:
+
+surprise_direction
+surprise_strength
+
+A larger surprise should generally receive more weight
+than a small or insignificant deviation.
+
+Do NOT assume that the numerical direction of an economic
+indicator automatically equals the direction of XAUUSD.
+
+The meaning depends on the event type.
+
+For example, a stronger-than-expected inflation or
+employment result may strengthen USD/rate expectations
+and therefore create bearish pressure on gold.
+
+A weaker-than-expected result may create the opposite
+effect.
+
+Use the supplied event classification and biases when
+available.
+
+==================================================
+PRE-NEWS CONDITIONS
+==================================================
+
+If:
+
+pre_news_risk = true
+
+or:
+
+news_state = UPCOMING
+
+and a high-impact event is approaching:
+
+BE CONSERVATIVE.
+
+Do not open a trade immediately before a major scheduled
+event unless the supplied market structure provides an
+exceptionally strong and clearly defined opportunity.
+
+A qualified Scoring Engine result is NOT sufficient
+justification to enter immediately before major news.
+
+When the market setup is ambiguous before high-impact
+news:
+
+prefer NONE.
+
+==================================================
+POST-NEWS CONDITIONS
+==================================================
+
+If:
+
+post_news_analysis = true
+
+or:
+
+news_state = RECENT
+
+the market may be experiencing a rapid repricing event.
+
+Do NOT assume that the first directional move after news
+will continue.
+
+Do NOT automatically fade the initial move either.
+
+Evaluate:
+
+- actual vs forecast,
+- surprise direction,
+- surprise strength,
+- candle expansion,
+- momentum acceleration,
+- rejection,
+- failed breakout/breakdown,
+- SNR,
+- and whether price is beginning to stabilize.
+
+A strong post-news move with supporting structure may favor
+CONTINUATION.
+
+A strong post-news displacement followed by exhaustion,
+rejection, or failed breakout/breakdown may favor REVERSAL.
+
+If the post-news information and price structure conflict
+materially:
+
+prefer NONE unless one side has clearly stronger evidence.
+
+==================================================
+FUNDAMENTAL VS TECHNICAL
+==================================================
+
+Compare fundamental evidence against the technical setup.
+
+Classify the relationship as one of:
+
+ALIGNED
+    Fundamental and technical evidence support the same
+    directional trade.
+
+CONFLICTED
+    Fundamental and technical evidence support opposite
+    directions.
+
+NEUTRAL
+    Fundamental information provides little directional
+    information.
+
+UNKNOWN
+    Fundamental information is insufficient to determine
+    directional relevance.
+
+If ALIGNED:
+
+Increase confidence when the technical setup is also
+strong and the path toward the configured target is clear.
+
+If CONFLICTED:
+
+Reduce confidence significantly.
+
+Do NOT force a trade merely because the technical setup
+looks attractive.
+
+If the fundamental conflict is caused by a recent
+high-impact event or significant economic surprise:
+
+prefer NONE unless the technical setup demonstrates
+clear post-news confirmation.
+
+If NEUTRAL or UNKNOWN:
+
+Allow the technical and market-structure evidence to drive
+the decision, but do not artificially increase confidence
+because fundamental data is unavailable or neutral.
+
+==================================================
+FUNDAMENTAL SHOCK
+==================================================
+
+Treat a large economic surprise or major high-impact event
+as a potential FUNDAMENTAL SHOCK.
+
+A fundamental shock can invalidate a previously attractive
+technical setup.
+
+Examples include:
+
+- unusually large actual vs forecast deviation,
+- major inflation surprise,
+- major employment surprise,
+- major central-bank event,
+- sudden repricing following high-impact news.
+
+When a fundamental shock occurs:
+
+1. Re-evaluate the previous market structure.
+2. Do not assume the previous trend remains valid.
+3. Do not assume immediate mean reversion.
+4. Wait for price structure and candle behavior to confirm
+   the new direction.
+5. Prefer NONE when the market is still unstable or
+   directionally unclear.
+
+==================================================
+FUNDAMENTAL DECISION HIERARCHY
+==================================================
+
+Use the following hierarchy:
+
+1. FUNDAMENTAL SHOCK / HIGH-IMPACT EVENT
+2. FUNDAMENTAL DIRECTION
+3. MARKET STRUCTURE
+4. MOMENTUM
+5. SNR
+6. CANDLE BEHAVIOR
+7. PATTERN
+8. STATISTICS
+9. TARGET FEASIBILITY
+
+This hierarchy does NOT mean fundamental information
+automatically determines BUY or SELL.
+
+It means major fundamental information must be considered
+before trusting an otherwise attractive technical setup.
+
+Technical confirmation remains necessary for execution.
+
+==================================================
+FUNDAMENTAL CONFIDENCE
+==================================================
+
+Use:
+
+fundamental_confidence
+
+as a measure of how strongly the supplied fundamental data
+supports its directional interpretation.
+
+Do not treat fundamental_confidence as the probability of
+BUY or SELL.
+
+A high fundamental_confidence with conflicting technical
+evidence does NOT automatically justify a trade.
+
+A low fundamental_confidence should reduce the influence
+of the fundamental interpretation.
+
+==================================================
+FINAL FUNDAMENTAL ASSESSMENT
+==================================================
+
+Before making the final BUY / SELL / NONE decision,
+internally determine:
+
+1. What is the current fundamental direction?
+2. Is there a high-impact event?
+3. Is the event upcoming or recent?
+4. Is there a meaningful economic surprise?
+5. Does the fundamental direction support BUY?
+6. Does the fundamental direction support SELL?
+7. Does the technical setup agree?
+8. Is there a fundamental/technical conflict?
+9. Has a recent fundamental shock potentially changed
+   the market regime?
+10. Is there sufficient confirmation to target
+    {TP_POINTS} POINTS?
+
+If fundamental and technical evidence are both weak:
+return NONE.
+
+If fundamental and technical evidence strongly conflict:
+prefer NONE.
+
+If a high-impact event is imminent and confirmation is
+insufficient:
+prefer NONE.
+
+If a recent high-impact event has caused a strong move but
+there is no confirmation of continuation or reversal:
+prefer NONE.
+
+The objective is not to predict the economic news itself.
+
+The objective is to determine whether the combination of
+fundamental information and current price behavior creates
+a sufficiently strong XAUUSD trading edge.
+
+==================================================
+FUNDAMENTAL VS TECHNICAL
+==================================================
+
+Compare fundamental direction with the technical setup.
+
+If technical and fundamental evidence align:
+increase confidence.
+
+If technical and fundamental evidence conflict:
+reduce confidence unless the technical setup provides
+exceptionally strong short-term evidence.
+
+If a major high-impact event is imminent:
+be conservative.
+
+Do not enter immediately before major news unless the
+supplied data clearly indicates that the expected price
+movement remains sufficiently credible.
+
+Fundamental information must NEVER override an extremely
+strong market structure automatically.
+
+Likewise, technical information must NEVER be assumed
+correct simply because the Scoring Engine is qualified.
+
+The final decision must consider the interaction between:
+
+1. Fundamental
+2. Market structure
+3. Momentum
+4. Volatility
+5. SNR
+6. Candle behavior
+7. Pattern
+8. Target feasibility
+
+==================================================
 PATTERN
 ==================================================
 
