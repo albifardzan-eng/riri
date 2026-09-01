@@ -20,6 +20,27 @@ class AITrader:
             api_key=settings.OPENAI_API_KEY
         )
 
+    def _serialize_data(
+        self,
+        value
+    ) -> str:
+
+        if value is None:
+            return "null"
+
+        if hasattr(
+            value,
+            "model_dump"
+        ):
+            value = value.model_dump()
+
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            default=str,
+            indent=2
+        )
+
     async def decide(
         self,
         market,
@@ -27,6 +48,30 @@ class AITrader:
         fundamental,
         pattern
     ) -> TraderDecision:
+
+        market_json = (
+            self._serialize_data(
+                market
+            )
+        )
+
+        statistics_json = (
+            self._serialize_data(
+                statistics
+            )
+        )
+
+        fundamental_json = (
+            self._serialize_data(
+                fundamental
+            )
+        )
+
+        pattern_json = (
+            self._serialize_data(
+                pattern
+            )
+        )
 
         prompt = f"""
 You are RIRI, an institutional XAUUSD short-term trading AI.
@@ -46,6 +91,30 @@ Analyze the supplied MARKET, STATISTICS, PATTERN and
 FUNDAMENTAL data.
 
 Do not invent information or use external information.
+
+==================================================
+LIVE MARKET DATA
+==================================================
+
+{market_json}
+
+==================================================
+LIVE STATISTICS
+==================================================
+
+{statistics_json}
+
+==================================================
+LIVE FUNDAMENTAL DATA
+==================================================
+
+{fundamental_json}
+
+==================================================
+LIVE PATTERN DATA
+==================================================
+
+{pattern_json}
 
 ==================================================
 CORE ANALYSIS
@@ -156,7 +225,7 @@ When uncertain, choose NONE.
 FUNDAMENTAL + TECHNICAL
 ==================================================
 
-Classify the relationship as:
+Classify the relationship internally as:
 
 ALIGNED
 CONFLICTED
@@ -243,6 +312,12 @@ Return ONLY valid JSON:
     "confidence": 0
 }}
 
+Allowed decision values:
+
+BUY
+SELL
+NONE
+
 No explanation.
 No markdown.
 No additional fields.
@@ -261,10 +336,22 @@ Only JSON.
                 .strip()
             )
 
-            start = content.find("{")
-            end = content.rfind("}")
+            start = content.find(
+                "{"
+            )
 
-            if start == -1 or end == -1:
+            end = content.rfind(
+                "}"
+            )
+
+            if (
+                start == -1
+                or
+                end == -1
+                or
+                end < start
+            ):
+
                 raise ValueError(
                     "AI Trader returned invalid JSON"
                 )
@@ -284,9 +371,11 @@ Only JSON.
                 )
             ).upper().strip()
 
-            raw_confidence = data.get(
-                "confidence",
-                0
+            raw_confidence = (
+                data.get(
+                    "confidence",
+                    0
+                )
             )
 
             try:
@@ -321,6 +410,7 @@ Only JSON.
             )
 
             if decision == "NONE":
+
                 confidence = 0
 
             result = TraderDecision(
