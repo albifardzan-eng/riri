@@ -238,10 +238,10 @@ OUTPUT
 
 Return ONLY valid JSON:
 
-{
+{{
     "decision": "BUY",
     "confidence": 0
-}
+}}
 
 No explanation.
 No markdown.
