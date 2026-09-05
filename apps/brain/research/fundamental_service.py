@@ -68,6 +68,7 @@ class FundamentalService:
         risk_level = "NORMAL"
 
         high_impact_news = False
+        available = False
 
         minutes_to_news = None
 
@@ -114,6 +115,9 @@ class FundamentalService:
 
         mt5_fundamental = None
 
+        if hasattr(market, "model_dump"):
+            market = market.model_dump()
+
         if isinstance(
             market,
             dict
@@ -129,6 +133,13 @@ class FundamentalService:
             mt5_fundamental,
             dict
         ):
+
+            available = bool(
+                mt5_fundamental.get(
+                    "available",
+                    False
+                )
+            )
 
             high_impact_news = bool(
                 mt5_fundamental.get(
@@ -830,6 +841,9 @@ class FundamentalService:
         # ==================================================
 
         return {
+
+            "available":
+            available,
 
             # ------------------------------------------
             # MARKET CONTEXT

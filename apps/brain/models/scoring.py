@@ -39,3 +39,7 @@ class ScoringResult(BaseModel):
         ge=0,
         le=15
     )
+
+    rsi: float = Field(default=50.0, ge=0, le=100)
+
+    reversal_score: int = Field(default=0, ge=0, le=100)

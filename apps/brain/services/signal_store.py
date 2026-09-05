@@ -1,308 +1,134 @@
+import json
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
+
+from config.settings import BASE_DIR, settings
 
 
 class SignalStore:
+    """Durable, account-scoped signal queue with atomic delivery leases."""
 
-    SIGNAL_EXPIRY_SECONDS = 60
-
-    def __init__(self):
-        self.pending_signal: Optional[dict[str, Any]] = None
-        self.created_at: Optional[datetime] = None
-        self.delivered_at: Optional[datetime] = None
+    def __init__(self, path: str | Path | None = None) -> None:
+        configured = Path(path or settings.RIRI_STATE_DIR)
+        state_dir = configured if configured.is_absolute() else BASE_DIR / configured
+        state_dir.mkdir(parents=True, exist_ok=True)
+        self.path = state_dir / "signals.sqlite3"
         self._lock = Lock()
-
-    # ==================================================
-    # SET SIGNAL
-    # ==================================================
-
-    def set_signal(
-        self,
-        signal: dict[str, Any]
-    ) -> None:
-
-        if not signal:
-            return
-
-        signal_copy = dict(signal)
-
-        signal_id = signal_copy.get(
-            "signal_id"
-        )
-
-        if not signal_id:
-            raise ValueError(
-                "Signal must contain signal_id"
+        with self._connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS pending_signals (
+                    identity_key TEXT PRIMARY KEY,
+                    signal_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    delivered_at INTEGER
+                )"""
             )
 
-        with self._lock:
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.path, timeout=10, isolation_level=None)
 
-            self.pending_signal = signal_copy
+    @staticmethod
+    def _serialize(signal: Any) -> dict[str, Any]:
+        return signal.model_dump(mode="json") if hasattr(signal, "model_dump") else dict(signal)
 
-            self.created_at = (
-                datetime.now(
-                    timezone.utc
-                )
+    def set_signal(self, identity_key: str, signal: Any) -> None:
+        item = self._serialize(signal)
+        signal_id = item.get("signal_id")
+        expires_at = int(item.get("expires_at_epoch", 0))
+        if not signal_id or not expires_at:
+            raise ValueError("signal_id and expires_at_epoch are required")
+        with self._lock, self._connect() as db:
+            db.execute(
+                """INSERT INTO pending_signals(identity_key, signal_id, payload, expires_at, delivered_at)
+                   VALUES(?, ?, ?, ?, NULL)
+                   ON CONFLICT(identity_key) DO UPDATE SET
+                     signal_id=excluded.signal_id, payload=excluded.payload,
+                     expires_at=excluded.expires_at, delivered_at=NULL""",
+                (identity_key, signal_id, json.dumps(item, separators=(",", ":")), expires_at),
             )
 
-            self.delivered_at = None
-
-    # ==================================================
-    # GET SIGNAL
-    # ==================================================
-
-    def get_signal(
-        self
-    ) -> Optional[dict[str, Any]]:
-
-        with self._lock:
-
-            if self.pending_signal is None:
+    def get_signal(self, identity_key: str) -> dict[str, Any] | None:
+        now = int(datetime.now(timezone.utc).timestamp())
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT payload, expires_at FROM pending_signals WHERE identity_key=?",
+                (identity_key,),
+            ).fetchone()
+            if row is None:
                 return None
-
-            if self.created_at is None:
-
-                self._clear_locked()
-
+            if row[1] <= now:
+                db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
                 return None
+            return json.loads(row[0])
 
-            age = (
-                datetime.now(
-                    timezone.utc
-                )
-                -
-                self.created_at
-            ).total_seconds()
-
-            if (
-                age >
-                self.SIGNAL_EXPIRY_SECONDS
-            ):
-
-                self._clear_locked()
-
+    def claim_signal(self, identity_key: str) -> dict[str, Any] | None:
+        now = int(datetime.now(timezone.utc).timestamp())
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload, expires_at, delivered_at FROM pending_signals WHERE identity_key=?",
+                (identity_key,),
+            ).fetchone()
+            if row is None:
+                db.commit()
                 return None
-
-            return dict(
-                self.pending_signal
+            if row[1] <= now:
+                db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
+                db.commit()
+                return None
+            if row[2] is not None and now - row[2] < settings.SIGNAL_DELIVERY_LEASE_SECONDS:
+                db.commit()
+                return None
+            db.execute(
+                "UPDATE pending_signals SET delivered_at=? WHERE identity_key=?",
+                (now, identity_key),
             )
-
-    # ==================================================
-    # GET SIGNAL FOR DELIVERY
-    # ==================================================
-    #
-    # Returns the signal only once per signal_id.
-    #
-    # This prevents MT5 polling every few seconds from
-    # executing the same signal repeatedly.
-    #
-    # ==================================================
-
-    def get_signal_for_delivery(
-        self
-    ) -> Optional[dict[str, Any]]:
-
-        with self._lock:
-
-            if self.pending_signal is None:
-                return None
-
-            if self.created_at is None:
-
-                self._clear_locked()
-
-                return None
-
-            age = (
-                datetime.now(
-                    timezone.utc
-                )
-                -
-                self.created_at
-            ).total_seconds()
-
-            if (
-                age >
-                self.SIGNAL_EXPIRY_SECONDS
-            ):
-
-                self._clear_locked()
-
-                return None
-
-            if self.delivered_at is not None:
-                return None
-
-            self.delivered_at = (
-                datetime.now(
-                    timezone.utc
-                )
-            )
-
-            return dict(
-                self.pending_signal
-            )
-
-    # ==================================================
-    # CONFIRM SIGNAL
-    # ==================================================
+            db.commit()
+            signal = json.loads(row[0])
+            signal["status"] = "DELIVERED"
+            return signal
 
     def confirm(
         self,
-        signal_id: str
-    ) -> bool:
-
-        if not signal_id:
-            return False
-
-        with self._lock:
-
-            if self.pending_signal is None:
-                return False
-
-            current_signal_id = (
-                self.pending_signal.get(
-                    "signal_id"
-                )
-            )
-
-            if (
-                current_signal_id !=
-                signal_id
-            ):
-
-                return False
-
-            self._clear_locked()
-
-            return True
-
-    # ==================================================
-    # IS CURRENT SIGNAL
-    # ==================================================
-
-    def is_current_signal(
-        self,
-        signal_id: str
-    ) -> bool:
-
-        if not signal_id:
-            return False
-
-        with self._lock:
-
-            if self.pending_signal is None:
-                return False
-
-            current_signal_id = (
-                self.pending_signal.get(
-                    "signal_id"
-                )
-            )
-
-            return (
-                current_signal_id ==
-                signal_id
-            )
-
-    # ==================================================
-    # SIGNAL AGE
-    # ==================================================
-
-    def get_age_seconds(self) -> Optional[float]:
-
-        with self._lock:
-
-            if (
-                self.pending_signal is None
-                or
-                self.created_at is None
-            ):
+        identity_key: str,
+        signal_id: str,
+        action: str | None = None,
+        requested_lot: float | None = None,
+    ) -> dict[str, Any] | None:
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload FROM pending_signals WHERE identity_key=? AND signal_id=?",
+                (identity_key, signal_id),
+            ).fetchone()
+            if row is None:
+                db.commit()
                 return None
-
-            return (
-                datetime.now(
-                    timezone.utc
-                )
-                -
-                self.created_at
-            ).total_seconds()
-
-    # ==================================================
-    # DELIVERY STATUS
-    # ==================================================
-
-    def is_delivered(self) -> bool:
-
-        with self._lock:
-
-            return (
-                self.delivered_at is not None
-            )
-
-    # ==================================================
-    # RESET DELIVERY
-    # ==================================================
-    #
-    # Allows a still-valid signal to be delivered again
-    # after an execution failure.
-    #
-    # ==================================================
-
-    def reset_delivery(
-        self,
-        signal_id: Optional[str] = None
-    ) -> bool:
-
-        with self._lock:
-
-            if self.pending_signal is None:
-                return False
-
-            current_signal_id = (
-                self.pending_signal.get(
-                    "signal_id"
-                )
-            )
-
+            signal = json.loads(row[0])
+            if action is not None and signal.get("action") != action.upper():
+                db.commit()
+                return None
             if (
-                signal_id is not None
-                and
-                current_signal_id !=
-                signal_id
+                requested_lot is not None
+                and abs(float(signal.get("lot", 0)) - requested_lot) > 1e-8
             ):
-                return False
+                db.commit()
+                return None
+            db.execute(
+                "DELETE FROM pending_signals WHERE identity_key=? AND signal_id=?",
+                (identity_key, signal_id),
+            )
+            db.commit()
+            return signal
 
-            self.delivered_at = None
+    def clear(self, identity_key: str) -> None:
+        with self._lock, self._connect() as db:
+            db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
 
-            return True
-
-    # ==================================================
-    # CLEAR
-    # ==================================================
-
-    def clear(self) -> None:
-
-        with self._lock:
-
-            self._clear_locked()
-
-    # ==================================================
-    # INTERNAL CLEAR
-    # ==================================================
-
-    def _clear_locked(self) -> None:
-
-        self.pending_signal = None
-
-        self.created_at = None
-
-        self.delivered_at = None
-
-
-# ==================================================
-# SINGLETON
-# ==================================================
 
 signal_store = SignalStore()

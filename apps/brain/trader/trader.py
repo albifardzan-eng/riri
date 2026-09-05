@@ -2,22 +2,29 @@ import json
 
 from openai import AsyncOpenAI
 
-from config.ai_config import MODEL_NAME
 from config.settings import settings
 from config.trading_config import (
+    MIN_CONFIDENCE,
     TP_POINTS,
     SL_POINTS
 )
 
 from models.trader_decision import TraderDecision
+from utils.logger import logger
 
 
 class AITrader:
 
     def __init__(self):
 
-        self.client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY
+        self.client = (
+            AsyncOpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                timeout=settings.OPENAI_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
+            if settings.OPENAI_API_KEY
+            else None
         )
 
     def _serialize_data(
@@ -48,6 +55,12 @@ class AITrader:
         fundamental,
         pattern
     ) -> TraderDecision:
+
+        if self.client is None:
+            return TraderDecision(
+                decision="NONE",
+                confidence=0
+            )
 
         market_json = (
             self._serialize_data(
@@ -138,8 +151,8 @@ Consider:
 - rejection
 - breakout / failed breakout
 - exhaustion
-- continuation probability
-- reversal probability
+- continuation evidence
+- reversal evidence
 - target feasibility
 
 Do not assume that a strong move must continue.
@@ -327,8 +340,9 @@ Only JSON.
         try:
 
             response = await self.client.responses.create(
-                model=MODEL_NAME,
-                input=prompt
+                model=settings.OPENAI_MODEL,
+                input=prompt,
+                max_output_tokens=100,
             )
 
             content = (
@@ -409,8 +423,12 @@ Only JSON.
                 )
             )
 
-            if decision == "NONE":
+            if (
+                decision == "NONE"
+                or confidence < MIN_CONFIDENCE
+            ):
 
+                decision = "NONE"
                 confidence = 0
 
             result = TraderDecision(
@@ -418,7 +436,7 @@ Only JSON.
                 confidence=confidence
             )
 
-            print(
+            logger.info(
                 f"AITrader Decision="
                 f"{result.decision} "
                 f"Confidence="
@@ -429,10 +447,7 @@ Only JSON.
 
         except Exception as e:
 
-            print(
-                "AITrader Error:",
-                e
-            )
+            logger.exception(f"AITrader failed: {type(e).__name__}")
 
             return TraderDecision(
                 decision="NONE",

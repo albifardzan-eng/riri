@@ -18,3 +18,11 @@ build/
 logs/
 
 *.log
+
+# Runtime state and source bundles (may contain secrets)
+apps/brain/data/
+trade_journal.json
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.zip

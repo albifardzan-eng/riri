@@ -116,7 +116,7 @@ class PatternService:
         if average_range <= 0:
             average_range = 0.01
 
-        breakout = (
+        range_expansion = (
             current_range
             >
             average_range * 1.5
@@ -213,6 +213,26 @@ class PatternService:
 
         resistance = historical_high
         support = historical_low
+
+        prior_close = float(close.iloc[-2])
+
+        bullish_breakout = (
+            current_close > resistance
+            and
+            prior_close <= resistance
+        )
+
+        bearish_breakout = (
+            current_close < support
+            and
+            prior_close >= support
+        )
+
+        breakout = (
+            bullish_breakout
+            or
+            bearish_breakout
+        )
 
         # ==================================================
         # DISTANCE TO SNR
@@ -462,33 +482,14 @@ class PatternService:
         )
 
         # ==================================================
-        # TP / SL PROBABILITY
+        # EVIDENCE SCORES
         #
-        # This is only an analytical estimate.
-        # Final decision remains with AI Trader.
+        # These are deterministic heuristic strengths,
+        # not calibrated outcome probabilities.
         # ==================================================
 
-        tp_probability = min(
-            95,
-            strength
-        )
-
-        sl_probability = max(
-            5,
-            100 - tp_probability
-        )
-
-        # Reversal setup has separate probability because
-        # it is a different trading thesis from trend-following.
-        reversal_tp_probability = min(
-            95,
-            reversal_strength
-        )
-
-        reversal_sl_probability = max(
-            5,
-            100 - reversal_tp_probability
-        )
+        continuation_evidence_score = strength
+        reversal_evidence_score = reversal_strength
 
         # ==================================================
         # RETURN
@@ -545,6 +546,15 @@ class PatternService:
 
             "breakout":
             breakout,
+
+            "bullish_breakout":
+            bullish_breakout,
+
+            "bearish_breakout":
+            bearish_breakout,
+
+            "range_expansion":
+            range_expansion,
 
             "volume_spike":
             volume_spike,
@@ -658,20 +668,14 @@ class PatternService:
             reversal_strength,
 
             # ----------------------------------------------
-            # Probability
+            # Evidence scores
             # ----------------------------------------------
 
-            "tp_first_probability":
-            tp_probability,
+            "continuation_evidence_score":
+            continuation_evidence_score,
 
-            "sl_first_probability":
-            sl_probability,
-
-            "reversal_tp_first_probability":
-            reversal_tp_probability,
-
-            "reversal_sl_first_probability":
-            reversal_sl_probability,
+            "reversal_evidence_score":
+            reversal_evidence_score,
 
             # ----------------------------------------------
             # Current market

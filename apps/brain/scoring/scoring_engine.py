@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -67,9 +67,9 @@ class ScoringEngine:
             ema100
         )
 
-        momentum_score = self._momentum(
-            df
-        )
+        rsi = self._rsi(df)
+
+        momentum_score = self._momentum(rsi)
 
         volume_score = self._volume(
             df
@@ -119,31 +119,8 @@ class ScoringEngine:
             spread_score
         )
 
-        # ==================================================
-        # REVERSAL BOOST
-        #
-        # A strong reversal setup can qualify the market
-        # even when conventional trend scoring is weak.
-        #
-        # Maximum boost: 15 points.
-        # ==================================================
-
-        if reversal_score >= 80:
-
-            total_score += 15
-
-        elif reversal_score >= 65:
-
-            total_score += 10
-
-        elif reversal_score >= 50:
-
-            total_score += 5
-
-        total_score = min(
-            100,
-            total_score
-        )
+        # Reversal is context for AI Trader, not a seventh scoring weight.
+        total_score = min(100, total_score)
 
         return ScoringResult(
             score=total_score,
@@ -155,7 +132,9 @@ class ScoringEngine:
             volume_score=volume_score,
             volatility_score=volatility_score,
             session_score=session_score,
-            spread_score=spread_score
+            spread_score=spread_score,
+            rsi=round(rsi, 2),
+            reversal_score=reversal_score
         )
 
     # ==================================================
@@ -183,32 +162,21 @@ class ScoringEngine:
     # MOMENTUM
     # ==================================================
 
-    def _momentum(
-        self,
-        df: pd.DataFrame
-    ) -> int:
+    def _rsi(self, df: pd.DataFrame, period: int = 14) -> float:
+        delta = df["close"].diff()
+        gains = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
+        losses = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
+        average_loss = float(losses.iloc[-1])
+        if average_loss == 0:
+            return 100.0
+        rs = float(gains.iloc[-1]) / average_loss
+        return 100.0 - (100.0 / (1.0 + rs))
 
-        last_close = (
-            df["close"].iloc[-1]
-        )
-
-        previous_close = (
-            df["close"].iloc[-5]
-        )
-
-        move = abs(
-            last_close -
-            previous_close
-        )
-
-        if move > 3:
-
+    def _momentum(self, rsi: float) -> int:
+        if rsi >= 60 or rsi <= 40:
             return 15
-
-        if move > 1:
-
+        if rsi >= 55 or rsi <= 45:
             return 10
-
         return 5
 
     # ==================================================
@@ -274,7 +242,7 @@ class ScoringEngine:
     ) -> int:
 
         hour = (
-            datetime.utcnow().hour
+            datetime.now(timezone.utc).hour
         )
 
         if 12 <= hour <= 17:

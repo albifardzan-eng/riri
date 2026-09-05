@@ -11,6 +11,8 @@ SYMBOL = "XAUUSD"
 
 MIN_SCORE = 70
 
+MIN_CONFIDENCE = 70
+
 
 # ==================================================
 # TRADE PROTECTION
@@ -64,19 +66,5 @@ MAX_SPREAD = 30.0
 MIN_ATR = 1.0
 
 
-# ==================================================
-# RISK
-# ==================================================
-
-MIN_RISK_SCORE = 70
-
-
-# ==================================================
-# TRADING RULES
-# ==================================================
-
-ALLOW_HEDGING = False
-
-ALLOW_MARTINGALE = False
-
-ALLOW_AVERAGING = False
+# Hedging, martingale, and averaging are not feature flags in v1.
+# They are unconditional rejection rules in risk and MT5 preflight.
