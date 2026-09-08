@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Any
 
@@ -96,7 +97,33 @@ async def receive_market_data(data: MarketData, identity: MT5Identity = Depends(
         raise HTTPException(status_code=422, detail="stale or future market snapshot")
     if not snapshot_guard.accept(key, data.market_time):
         raise HTTPException(status_code=409, detail="replayed or out-of-order market snapshot")
-    market_store.begin_cycle(key, data)
+    cycle_id = market_store.begin_cycle(key, data)
+    try:
+        return await analyze_market_cycle(data, key, cycle_id)
+    except (Exception, asyncio.CancelledError) as exc:
+        reason = "CYCLE_SUPERSEDED" if isinstance(exc, HTTPException) and exc.status_code == 409 else "PIPELINE_ERROR"
+        if isinstance(exc, asyncio.CancelledError):
+            reason = "PIPELINE_INTERRUPTED"
+        pipeline = {
+            "status": "SKIPPED" if reason == "CYCLE_SUPERSEDED" else "ERROR",
+            "stage": "STOPPED", "reason": reason,
+        }
+        market_store.update_stage(key, "pipeline", pipeline, cycle_id=cycle_id)
+        trade_journal.event(
+            "ANALYSIS", account_id=data.account_id, terminal_id=data.terminal_id,
+            instance_id=data.instance_id, symbol=data.symbol, market_time=data.market_time,
+            pipeline={**pipeline, "cycle_id": cycle_id}, gate_reason=reason,
+        )
+        logger.warning(f"Market pipeline stopped: {reason}")
+        if isinstance(exc, (HTTPException, asyncio.CancelledError)):
+            raise
+        raise HTTPException(status_code=503, detail="market analysis failed") from None
+
+
+async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
+    def update(stage, value):
+        if not market_store.update_stage(key, stage, value, cycle_id=cycle_id):
+            raise HTTPException(status_code=409, detail="market analysis superseded by newer snapshot")
 
     score = scoring_engine.calculate(data)
     statistics = statistics_service.analyze(data)
@@ -106,11 +133,14 @@ async def receive_market_data(data: MarketData, identity: MT5Identity = Depends(
         ("score", score), ("statistics", statistics),
         ("fundamental", fundamental), ("pattern", pattern),
     ):
-        market_store.update_stage(key, stage, value)
+        update(stage, value)
 
     decision = risk = execution = None
     allowed, gate_reason = cooldown_status(data)
+    if not score.qualified:
+        gate_reason = "SCORE_BELOW_THRESHOLD"
     if score.qualified and allowed:
+        update("pipeline", {"stage": "AI"})
         market_context = data.model_dump()
         market_context["target"] = {
             "tp_points": TP_POINTS,
@@ -126,14 +156,22 @@ async def receive_market_data(data: MarketData, identity: MT5Identity = Depends(
             fundamental=fundamental,
             pattern=pattern,
         )
-        market_store.update_stage(key, "decision", decision)
+        update("decision", decision)
+        update("pipeline", {"stage": "RISK"})
         risk = await ai_risk.evaluate(market=data, trader_decision=decision)
-        market_store.update_stage(key, "risk", risk)
+        update("risk", risk)
+        update("pipeline", {"stage": "EXECUTION"})
         execution = await execution_service.execute(decision=decision, risk=risk, market=data)
-        market_store.update_stage(key, "execution", execution)
+        update("execution", execution)
     elif score.qualified:
         logger.info(f"AI Trader skipped for {key}: {gate_reason}")
 
+    pipeline = {"cycle_id": cycle_id, "status": "COMPLETED", "stage": "DONE", "reason": None}
+    if decision is None:
+        pipeline.update(status="SKIPPED", reason=gate_reason)
+    elif decision.status in {"ERROR", "UNAVAILABLE"}:
+        pipeline.update(status="ERROR", reason=decision.reason)
+    # Persist the final marker only after the journal and all stages exist.
     event = "SIGNAL_CREATED" if execution and execution.signal_created else "ANALYSIS"
     journal_record = trade_journal.event(
         event,
@@ -143,6 +181,7 @@ async def receive_market_data(data: MarketData, identity: MT5Identity = Depends(
         symbol=data.symbol,
         market_time=data.market_time,
         gate_reason=gate_reason,
+        pipeline=pipeline,
         score=serialize(score),
         statistics=statistics,
         fundamental=fundamental,
@@ -151,13 +190,15 @@ async def receive_market_data(data: MarketData, identity: MT5Identity = Depends(
         risk=serialize(risk),
         execution=serialize(execution),
     )
-    market_store.update_stage(key, "journal", journal_record)
+    update("journal", journal_record)
+    update("pipeline", pipeline)
 
     return {
         "success": True,
         "score": score.score,
         "qualified": score.qualified,
         "gate_reason": gate_reason,
+        "pipeline": pipeline,
         "decision": serialize(decision),
         "risk": serialize(risk),
         "execution": serialize(execution),

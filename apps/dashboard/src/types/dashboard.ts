@@ -10,6 +10,22 @@ export interface ScoreResult {
 export interface TraderDecision {
   decision: "BUY" | "SELL" | "NONE"
   confidence: number
+  status?: "UNKNOWN" | "COMPLETED" | "FILTERED" | "ERROR" | "UNAVAILABLE"
+  reason?: string
+  latency_ms?: number | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+  reasoning_tokens?: number | null
+}
+
+export interface PipelineState {
+  cycle_id: string
+  status: "PROCESSING" | "COMPLETED" | "SKIPPED" | "ERROR"
+  stage: string
+  reason?: string | null
+  started_at?: string
+  updated_at?: string
+  completed_at?: string | null
 }
 
 export interface RiskDecision {
@@ -27,6 +43,7 @@ export interface ExecutionResult {
 }
 
 export interface DashboardSnapshot {
+  pipeline?: PipelineState
   market?: MarketData
   score?: ScoreResult
   decision?: TraderDecision
@@ -36,6 +53,8 @@ export interface DashboardSnapshot {
 }
 
 export interface JournalRecord {
+  pipeline?: PipelineState
+  gate_reason?: string
   timestamp?: string
   event?: "ANALYSIS" | "SIGNAL_CREATED" | "TRADE_EXECUTED" | "TRADE_REJECTED" | "TRADE_CLOSED"
   symbol?: string

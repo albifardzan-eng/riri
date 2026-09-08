@@ -1,5 +1,24 @@
 # Development log
 
+## 2026-09-08 — 1.1.2 analysis observability
+
+- Raised the default output-token ceiling to 2048; retained model, timeout,
+  strict two-field schema, no retries, and every trading/risk threshold.
+- Distinguished real NONE, low-confidence filtering, unavailable AI, quota,
+  rate-limit, timeout, incomplete, refusal, empty and invalid responses.
+- Added sanitized latency/token diagnostics, with no response bodies or secrets.
+- Added durable cycle status and cycle-ID guards against stale snapshot writes.
+  Unexpected/cancelled request handling records a terminal diagnostic.
+- Dashboard displays current-cycle status and diagnostic reasons; journal
+  prioritizes the actual spread rejection over generic RISK_REJECTED.
+- Isolated all test state from production SQLite files and added offline
+  regression coverage. No live OpenAI calls are needed to run these tests.
+- Deployment is separate from publishing this branch. Existing `.env` values
+  override defaults: explicitly set `APP_VERSION=1.1.2` and
+  `OPENAI_MAX_OUTPUT_TOKENS=2048` in the **new** release before staging.
+  A larger cap may increase cost/latency and does not guarantee completion.
+  Keep the active release, shared state and rollback backup until verified.
+
 ## 2026-09-08 — AI response reliability
 
 - Replaced prompt-only JSON with strict Responses API Structured Outputs.

@@ -19,6 +19,12 @@ Strict snapshot fields include identity, `XAUUSD`, timeframe, UTC market timesta
 
 A successful response describes scoring and current pipeline outcomes. HTTP 200 does not mean a trade exists; inspect `qualified`, `decision`, `risk`, and `execution`.
 
+Since 1.1.2, responses and analysis journal records also carry `pipeline`
+(`cycle_id`, `status`, `stage`, `reason`). A superseded analysis returns HTTP 409
+and cannot write its stages over the newer cycle; unexpected processing errors
+return HTTP 503 with a sanitized message. AI-provider failures still produce a
+successful snapshot response, but `pipeline.status=ERROR` and decision `NONE/0`.
+
 ## `GET /execution/pending`
 
 Returns `{"signal": null}` or an identity-bound signal containing direction, lot, immutable TP/SL points, confidence, source market time, and expiry epochs. Delivery is leased; an unacknowledged signal may be delivered again after the lease.
@@ -47,6 +53,40 @@ Required payload:
 ## Dashboard endpoints
 
 `GET /dashboard/latest` returns one coherent latest pipeline snapshot. `GET /journal/history` returns up to 100 ordered lifecycle records. Legacy per-stage reads remain available but carry the same dashboard authentication.
+
+The latest snapshot is **in progress**, not necessarily the last completed
+analysis. Starting a cycle clears its predecessor's stages. Inspect `pipeline`:
+
+| Status | Meaning |
+|---|---|
+| `PROCESSING` | Research, AI, risk or execution stage is running; later stages may be absent |
+| `COMPLETED` | Analysis finished, including normal NONE, filtered confidence or risk rejection; not proof of an order |
+| `SKIPPED` | Analysis gated by score/cooldown, or an older request superseded |
+| `ERROR` | AI unavailable/failed, or processing failed/interrupted |
+
+Snapshot pipeline metadata includes `started_at`, `updated_at`, `completed_at`
+and source `market_time`. The dashboard is server-rendered: refresh to fetch a
+new snapshot. Old records have no diagnostics; treat them as `UNKNOWN`, not as
+confirmed normal NONE. A hard process kill cannot write an interruption marker;
+check timestamps and service health if a PROCESSING row stops updating.
+
+`decision.status` is backend-generated: `COMPLETED` for valid model output,
+`FILTERED` for directional confidence below 70, `ERROR` for provider/output
+failure, `UNAVAILABLE` when not configured, and `UNKNOWN` for legacy data.
+Every failure/filter returns `decision=NONE, confidence=0`. `reason` is a
+deterministic diagnostic code, **not** an AI-generated strategy explanation.
+The provider's strict JSON schema remains only `decision` and `confidence`.
+
+Common reasons: `AI_NO_TRADE`, `AI_DIRECTION_SELECTED`, `CONFIDENCE_BELOW_70`,
+`AI_MAX_OUTPUT_TOKENS`, `AI_EMPTY_OUTPUT`, `AI_INVALID_OUTPUT`, `AI_REFUSAL`,
+`AI_RESPONSE_NOT_COMPLETED`, `AI_TIMEOUT`, `AI_CONNECTION_ERROR`,
+`AI_ACCESS_DENIED`, `AI_QUOTA_EXHAUSTED`, `AI_RATE_LIMITED`, `AI_API_ERROR`,
+`AI_NOT_CONFIGURED`. Failures are not automatically retried.
+
+Optional `latency_ms`, `input_tokens`, `output_tokens`, and `reasoning_tokens`
+support diagnosis without exposing prompts or hidden reasoning. Output tokens
+already include reasoning tokens; do not add the two to calculate output usage.
+MT5 signal/ACK contracts and all trading thresholds are unchanged.
 
 ## `POST /execution/trade-event`
 

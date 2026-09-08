@@ -29,6 +29,14 @@ class TraderDecision(BaseModel):
         description="AI confidence score from 0 to 100."
     )
 
+    # Backend-generated diagnostics, never requested from the model or sent
+    # as instructions to MT5. UNKNOWN preserves the meaning of legacy rows.
+    status: Literal["UNKNOWN", "COMPLETED", "FILTERED", "ERROR", "UNAVAILABLE"] = "UNKNOWN"
+    latency_ms: int | None = Field(default=None, ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+
     strategy: Literal[
         "TREND",
         "REVERSAL",

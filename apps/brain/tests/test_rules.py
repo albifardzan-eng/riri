@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import json
 import os
 import sys
@@ -14,6 +15,9 @@ sys.path.insert(0, str(BRAIN_DIR))
 # module load time. Override any operator/production .env before those imports
 # so the suite is hermetic and cannot initialize or call a live OpenAI client.
 os.environ["OPENAI_API_KEY"] = ""
+_test_state = tempfile.TemporaryDirectory(prefix="riri-test-state-")
+atexit.register(_test_state.cleanup)
+os.environ["RIRI_STATE_DIR"] = _test_state.name
 
 from models.market_data import FundamentalData, MarketData
 from models.risk_decision import RiskDecision
@@ -208,7 +212,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         trader = AITrader()
         trader.client = type("Client", (), {"responses": Responses()})()
         result = await trader.decide({}, {}, {}, {})
-        self.assertEqual(result, TraderDecision(decision="NONE", confidence=0))
+        self.assertEqual((result.decision, result.confidence, result.status, result.reason),
+                         ("NONE", 0, "ERROR", "AI_MAX_OUTPUT_TOKENS"))
 
     async def test_ai_malformed_output_fails_closed(self):
         class Responses:
@@ -222,7 +227,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         trader = AITrader()
         trader.client = type("Client", (), {"responses": Responses()})()
         result = await trader.decide({}, {}, {}, {})
-        self.assertEqual(result, TraderDecision(decision="NONE", confidence=0))
+        self.assertEqual((result.decision, result.confidence, result.status, result.reason),
+                         ("NONE", 0, "ERROR", "AI_INVALID_OUTPUT"))
 
     async def test_ai_schema_violation_fails_closed(self):
         class Responses:
@@ -245,7 +251,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         trader = AITrader()
         trader.client = type("Client", (), {"responses": Responses()})()
         result = await trader.decide({}, {}, {}, {})
-        self.assertEqual(result, TraderDecision(decision="NONE", confidence=0))
+        self.assertEqual((result.decision, result.confidence, result.status, result.reason),
+                         ("NONE", 0, "ERROR", "AI_INVALID_OUTPUT"))
 
     def test_score_is_sum_of_the_six_declared_weights(self):
         result = ScoringEngine().calculate(market())

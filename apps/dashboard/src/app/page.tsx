@@ -20,6 +20,8 @@ export default async function Home() {
       <h1 className="mb-2 text-4xl font-bold">RIRI Dashboard</h1>
       <p className="mb-8 text-sm text-neutral-500">
         {market ? `${market.symbol} · ${market.timeframe} · account ${market.account_id}` : "No market snapshot"}
+        {snapshot.updated_at && ` · Updated ${snapshot.updated_at}`}
+        {" · Refresh this page for the latest snapshot."}
       </p>
 
       {unavailable && (
@@ -34,9 +36,13 @@ export default async function Home() {
         <DashboardCard title="Free Margin" value={market?.free_margin ?? 0} />
         <DashboardCard title="Open Trades" value={market?.positions?.length ?? 0} />
         <DashboardCard title="Score" value={snapshot.score?.score ?? 0} />
-        <DashboardCard title="Last Decision" value={snapshot.decision?.decision ?? "-"} />
-        <DashboardCard title="Confidence" value={snapshot.decision?.confidence ?? 0} />
+        <DashboardCard title="Current Decision" value={snapshot.decision?.decision ?? "-"} />
+        <DashboardCard title="Confidence" value={snapshot.decision?.confidence ?? "-"} />
         <DashboardCard title="Risk" value={snapshot.risk?.approved ? "APPROVED" : snapshot.risk?.reason ?? "-"} />
+        <DashboardCard title="Pipeline" value={snapshot.pipeline ? `${snapshot.pipeline.status} · ${snapshot.pipeline.stage}` : "UNKNOWN"} />
+        <DashboardCard title="AI Status" value={snapshot.decision?.status ?? (snapshot.pipeline?.status === "PROCESSING" ? "PENDING" : snapshot.pipeline?.status === "SKIPPED" ? "NOT_CALLED" : "UNKNOWN")} />
+        <DashboardCard title="Analysis Reason" value={snapshot.pipeline?.reason || snapshot.decision?.reason || "-"} />
+        <DashboardCard title="AI Output Tokens" value={snapshot.decision?.output_tokens ?? "-"} />
       </div>
 
       <section className="mt-10">

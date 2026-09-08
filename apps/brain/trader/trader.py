@@ -1,6 +1,10 @@
 import json
+import time
 
-from openai import AsyncOpenAI
+from openai import (
+    AsyncOpenAI, APIConnectionError, APITimeoutError,
+    AuthenticationError, PermissionDeniedError, RateLimitError,
+)
 
 from config.settings import settings
 from config.trading_config import (
@@ -80,11 +84,35 @@ class AITrader:
         pattern
     ) -> TraderDecision:
 
-        if self.client is None:
-            return TraderDecision(
-                decision="NONE",
-                confidence=0
+        started = time.monotonic()
+        response = None
+
+        def finish(status, reason, decision="NONE", confidence=0):
+            usage = getattr(response, "usage", None)
+            details = getattr(usage, "output_tokens_details", None)
+
+            def tokens(source, name):
+                value = getattr(source, name, None)
+                return value if type(value) is int and value >= 0 else None
+
+            result = TraderDecision(
+                decision=decision, confidence=confidence, status=status,
+                reason=reason, latency_ms=int((time.monotonic() - started) * 1000),
+                input_tokens=tokens(usage, "input_tokens"),
+                output_tokens=tokens(usage, "output_tokens"),
+                reasoning_tokens=tokens(details, "reasoning_tokens"),
             )
+            # No response text, exception body, credentials or account context.
+            log = logger.warning if status in {"ERROR", "UNAVAILABLE"} else logger.info
+            log(
+                f"AITrader Decision={result.decision} Confidence={result.confidence} "
+                f"Status={status} Reason={reason} LatencyMs={result.latency_ms} "
+                f"OutputTokens={result.output_tokens} ReasoningTokens={result.reasoning_tokens}"
+            )
+            return result
+
+        if self.client is None:
+            return finish("UNAVAILABLE", "AI_NOT_CONFIGURED")
 
         market_json = (
             self._serialize_data(
@@ -377,7 +405,7 @@ Only JSON.
                 None,
             )
 
-            if response_status not in (None, "completed"):
+            if response_status != "completed":
                 incomplete_details = getattr(
                     response,
                     "incomplete_details",
@@ -388,15 +416,19 @@ Only JSON.
                     "reason",
                     "unknown",
                 )
-                logger.warning(
-                    "AITrader response not completed: "
-                    f"status={response_status} "
-                    f"reason={incomplete_reason}"
+                reason = (
+                    "AI_MAX_OUTPUT_TOKENS"
+                    if response_status == "incomplete" and incomplete_reason == "max_output_tokens"
+                    else "AI_RESPONSE_NOT_COMPLETED"
                 )
-                return TraderDecision(
-                    decision="NONE",
-                    confidence=0,
-                )
+                return finish("ERROR", reason)
+
+            if any(
+                getattr(part, "type", None) == "refusal"
+                for item in (getattr(response, "output", None) or [])
+                for part in (getattr(item, "content", None) or [])
+            ):
+                return finish("ERROR", "AI_REFUSAL")
 
             content = str(
                 getattr(
@@ -408,14 +440,7 @@ Only JSON.
             ).strip()
 
             if not content:
-                logger.warning(
-                    "AITrader returned no structured output; "
-                    "decision defaults to NONE"
-                )
-                return TraderDecision(
-                    decision="NONE",
-                    confidence=0,
-                )
+                return finish("ERROR", "AI_EMPTY_OUTPUT")
 
             data = json.loads(
                 content
@@ -453,49 +478,29 @@ Only JSON.
                     "AI Trader response has invalid confidence"
                 )
 
-            if (
-                decision == "NONE"
-                or confidence < MIN_CONFIDENCE
-            ):
-
-                decision = "NONE"
-                confidence = 0
-
-            result = TraderDecision(
-                decision=decision,
-                confidence=confidence
-            )
-
-            logger.info(
-                f"AITrader Decision="
-                f"{result.decision} "
-                f"Confidence="
-                f"{result.confidence}"
-            )
-
-            return result
+            if decision == "NONE":
+                return finish("COMPLETED", "AI_NO_TRADE")
+            if confidence < MIN_CONFIDENCE:
+                return finish("FILTERED", "CONFIDENCE_BELOW_70")
+            return finish("COMPLETED", "AI_DIRECTION_SELECTED", decision, confidence)
 
         except (
             json.JSONDecodeError,
             TypeError,
             ValueError,
-        ) as e:
-
-            logger.warning(
-                "AITrader rejected malformed structured output: "
-                f"{type(e).__name__}"
-            )
-
-            return TraderDecision(
-                decision="NONE",
-                confidence=0
-            )
-
-        except Exception as e:
-
-            logger.exception(f"AITrader failed: {type(e).__name__}")
-
-            return TraderDecision(
-                decision="NONE",
-                confidence=0
-            )
+        ):
+            return finish("ERROR", "AI_INVALID_OUTPUT")
+        except APITimeoutError:
+            return finish("ERROR", "AI_TIMEOUT")
+        except APIConnectionError:
+            return finish("ERROR", "AI_CONNECTION_ERROR")
+        except (AuthenticationError, PermissionDeniedError):
+            return finish("ERROR", "AI_ACCESS_DENIED")
+        except RateLimitError as exc:
+            body = exc.body if isinstance(exc.body, dict) else {}
+            error = body.get("error", body)
+            error = error if isinstance(error, dict) else {}
+            quota = error.get("code") in {"insufficient_quota", "credit_balance_exhausted"} or error.get("type") == "insufficient_quota"
+            return finish("ERROR", "AI_QUOTA_EXHAUSTED" if quota else "AI_RATE_LIMITED")
+        except Exception:
+            return finish("ERROR", "AI_API_ERROR")

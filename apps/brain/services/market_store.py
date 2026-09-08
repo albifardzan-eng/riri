@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 from config.settings import BASE_DIR, settings
 
@@ -14,7 +15,7 @@ class MarketStore:
 
     STAGES = {
         "market", "score", "statistics", "fundamental", "pattern",
-        "decision", "risk", "execution", "journal",
+        "decision", "risk", "execution", "journal", "pipeline",
     }
 
     def __init__(self, path: str | Path | None = None) -> None:
@@ -65,23 +66,48 @@ class MarketStore:
             return cls._normalize(value.tolist())
         return str(value)
 
-    def begin_cycle(self, identity_key: str, market: Any) -> None:
+    def begin_cycle(self, identity_key: str, market: Any) -> str:
         now = datetime.now(timezone.utc).isoformat()
-        payload = json.dumps(self._normalize(market), allow_nan=False, separators=(",", ":"))
+        cycle_id = str(uuid4())
+        normalized = self._normalize(market)
+        payload = json.dumps(normalized, allow_nan=False, separators=(",", ":"))
         with self._lock, self._connect() as db:
             db.execute("DELETE FROM market_state WHERE identity_key=?", (identity_key,))
             db.execute(
                 "INSERT INTO market_state(identity_key, stage, payload, updated_at) VALUES(?, 'market', ?, ?)",
                 (identity_key, payload, now),
             )
+            db.execute(
+                "INSERT INTO market_state(identity_key, stage, payload, updated_at) VALUES(?, 'pipeline', ?, ?)",
+                (identity_key, json.dumps({
+                    "cycle_id": cycle_id, "market_time": normalized.get("market_time"),
+                    "status": "PROCESSING", "stage": "RESEARCH", "reason": None,
+                    "started_at": now, "updated_at": now, "completed_at": None,
+                }), now),
+            )
             db.execute("UPDATE market_metadata SET latest_identity=? WHERE id=1", (identity_key,))
+        return cycle_id
 
-    def update_stage(self, identity_key: str, stage: str, data: Any) -> None:
+    def update_stage(self, identity_key: str, stage: str, data: Any, *, cycle_id: str | None = None) -> bool:
         if stage not in self.STAGES:
             raise ValueError(f"unknown market-store stage: {stage}")
         now = datetime.now(timezone.utc).isoformat()
-        payload = json.dumps(self._normalize(data), allow_nan=False, separators=(",", ":"))
         with self._lock, self._connect() as db:
+            # The check and write must be atomic even across store instances.
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload FROM market_state WHERE identity_key=? AND stage='pipeline'",
+                (identity_key,),
+            ).fetchone()
+            pipeline = json.loads(row[0]) if row else {}
+            if cycle_id is not None and pipeline.get("cycle_id") != cycle_id:
+                return False
+            normalized = self._normalize(data)
+            if stage == "pipeline":
+                normalized = {**pipeline, **normalized, "updated_at": now}
+                if normalized.get("status") != "PROCESSING":
+                    normalized["completed_at"] = now
+            payload = json.dumps(normalized, allow_nan=False, separators=(",", ":"))
             db.execute(
                 """INSERT INTO market_state(identity_key, stage, payload, updated_at)
                    VALUES(?, ?, ?, ?)
@@ -90,6 +116,7 @@ class MarketStore:
                 (identity_key, stage, payload, now),
             )
             db.execute("UPDATE market_metadata SET latest_identity=? WHERE id=1", (identity_key,))
+        return True
 
     def _identity(self, db: sqlite3.Connection, identity_key: str | None) -> str | None:
         if identity_key:
