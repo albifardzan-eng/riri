@@ -13,6 +13,30 @@ from models.trader_decision import TraderDecision
 from utils.logger import logger
 
 
+DECISION_TEXT_CONFIG = {
+    "format": {
+        "type": "json_schema",
+        "name": "riri_trade_decision",
+        "description": "RIRI's final XAUUSD trade direction and confidence.",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": ["BUY", "SELL", "NONE"],
+                },
+                "confidence": {
+                    "type": "integer",
+                },
+            },
+            "required": ["decision", "confidence"],
+            "additionalProperties": False,
+        },
+    }
+}
+
+
 class AITrader:
 
     def __init__(self):
@@ -342,86 +366,92 @@ Only JSON.
             response = await self.client.responses.create(
                 model=settings.OPENAI_MODEL,
                 input=prompt,
-                max_output_tokens=100,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS,
+                text=DECISION_TEXT_CONFIG,
+                store=False,
             )
 
-            content = (
-                response.output_text
-                .strip()
+            response_status = getattr(
+                response,
+                "status",
+                None,
             )
 
-            start = content.find(
-                "{"
-            )
-
-            end = content.rfind(
-                "}"
-            )
-
-            if (
-                start == -1
-                or
-                end == -1
-                or
-                end < start
-            ):
-
-                raise ValueError(
-                    "AI Trader returned invalid JSON"
+            if response_status not in (None, "completed"):
+                incomplete_details = getattr(
+                    response,
+                    "incomplete_details",
+                    None,
+                )
+                incomplete_reason = getattr(
+                    incomplete_details,
+                    "reason",
+                    "unknown",
+                )
+                logger.warning(
+                    "AITrader response not completed: "
+                    f"status={response_status} "
+                    f"reason={incomplete_reason}"
+                )
+                return TraderDecision(
+                    decision="NONE",
+                    confidence=0,
                 )
 
-            content = content[
-                start:end + 1
-            ]
+            content = str(
+                getattr(
+                    response,
+                    "output_text",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not content:
+                logger.warning(
+                    "AITrader returned no structured output; "
+                    "decision defaults to NONE"
+                )
+                return TraderDecision(
+                    decision="NONE",
+                    confidence=0,
+                )
 
             data = json.loads(
                 content
             )
 
-            decision = str(
-                data.get(
-                    "decision",
+            if (
+                not isinstance(data, dict)
+                or set(data) != {"decision", "confidence"}
+            ):
+                raise ValueError(
+                    "AI Trader response has unexpected fields"
+                )
+
+            decision = data["decision"]
+            confidence = data["confidence"]
+
+            if (
+                not isinstance(decision, str)
+                or decision not in (
+                    "BUY",
+                    "SELL",
                     "NONE"
                 )
-            ).upper().strip()
-
-            raw_confidence = (
-                data.get(
-                    "confidence",
-                    0
-                )
-            )
-
-            try:
-
-                confidence = int(
-                    float(
-                        raw_confidence
-                    )
-                )
-
-            except (
-                TypeError,
-                ValueError
             ):
-
-                confidence = 0
-
-            if decision not in (
-                "BUY",
-                "SELL",
-                "NONE"
-            ):
-
-                decision = "NONE"
-
-            confidence = max(
-                0,
-                min(
-                    100,
-                    confidence
+                raise ValueError(
+                    "AI Trader response has invalid decision"
                 )
-            )
+
+            if (
+                not isinstance(confidence, int)
+                or isinstance(confidence, bool)
+                or not 0 <= confidence <= 100
+            ):
+                raise ValueError(
+                    "AI Trader response has invalid confidence"
+                )
 
             if (
                 decision == "NONE"
@@ -444,6 +474,22 @@ Only JSON.
             )
 
             return result
+
+        except (
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ) as e:
+
+            logger.warning(
+                "AITrader rejected malformed structured output: "
+                f"{type(e).__name__}"
+            )
+
+            return TraderDecision(
+                decision="NONE",
+                confidence=0
+            )
 
         except Exception as e:
 

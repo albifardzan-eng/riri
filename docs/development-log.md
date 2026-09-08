@@ -1,5 +1,20 @@
 # Development log
 
+## 2026-09-08 — AI response reliability
+
+- Replaced prompt-only JSON with strict Responses API Structured Outputs.
+- Raised the configurable output budget because it includes reasoning tokens,
+  not only the visible two-field JSON object.
+- Added explicit incomplete/empty/malformed response handling that fails closed
+  to `NONE` without turning an expected model-output condition into a traceback.
+- Disabled response persistence for one-shot market decisions.
+- Added regression tests for the schema contract, all four live context inputs,
+  token budget, privacy flag, and fail-closed edge cases.
+- Isolated API tests from production `.env` so they cannot invoke or bill the
+  live OpenAI model during deployment verification.
+- Documented the systemd release path as production source of truth to prevent
+  debugging the inactive `/opt/riri` checkout.
+
 ## 2026-09-02 — full audit remediation
 
 - Replaced the stale monolithic EA with the supplied seven-file production source.

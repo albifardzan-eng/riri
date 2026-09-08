@@ -33,6 +33,15 @@ RIRI is an account-scoped XAUUSD trading pipeline:
 
 Never commit `.env`, compiled EA parameter files, archives, or credentials. See [architecture](docs/architecture.md) and [API contracts](docs/api-contracts.md).
 
+## Production source of truth
+
+The live backend is the path shown by `systemctl cat riri-api`, especially
+`WorkingDirectory`, `EnvironmentFile`, and `ExecStart`. A checkout at
+`/opt/riri` is not automatically the running release when systemd points to a
+versioned directory such as `/opt/riri-releases/v1.1.0`. Diagnose and deploy
+against the active release path, then verify both loopback and public
+`/health` and `/ready` endpoints before resuming AutoTrading.
+
 ## Verification
 
 ```bash

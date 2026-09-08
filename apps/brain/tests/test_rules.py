@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 import tempfile
 import time
@@ -9,9 +10,15 @@ from pathlib import Path
 BRAIN_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BRAIN_DIR))
 
+# Test collection imports the FastAPI routes, which construct AITrader at
+# module load time. Override any operator/production .env before those imports
+# so the suite is hermetic and cannot initialize or call a live OpenAI client.
+os.environ["OPENAI_API_KEY"] = ""
+
 from models.market_data import FundamentalData, MarketData
 from models.risk_decision import RiskDecision
 from models.trader_decision import TraderDecision
+from api import routes as api_routes
 from research.fundamental_service import FundamentalService
 from risk.risk import AIRisk
 from scoring.scoring_engine import ScoringEngine
@@ -117,13 +124,128 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_ai_confidence_below_threshold_becomes_none(self):
         class Responses:
             async def create(self, **_kwargs):
-                return type("Response", (), {"output_text": json.dumps({"decision": "BUY", "confidence": 69})})()
+                return type(
+                    "Response",
+                    (),
+                    {
+                        "status": "completed",
+                        "output_text": json.dumps({"decision": "BUY", "confidence": 69}),
+                    },
+                )()
 
         trader = AITrader()
         trader.client = type("Client", (), {"responses": Responses()})()
         result = await trader.decide({}, {}, {}, {})
         self.assertEqual(result.decision, "NONE")
         self.assertEqual(result.confidence, 0)
+
+    async def test_ai_uses_strict_schema_and_all_live_context(self):
+        class Responses:
+            def __init__(self):
+                self.kwargs = None
+
+            async def create(self, **kwargs):
+                self.kwargs = kwargs
+                return type(
+                    "Response",
+                    (),
+                    {
+                        "status": "completed",
+                        "output_text": json.dumps({"decision": "BUY", "confidence": 80}),
+                    },
+                )()
+
+        responses = Responses()
+        trader = AITrader()
+        trader.client = type("Client", (), {"responses": responses})()
+        result = await trader.decide(
+            {"market_marker": "LIVE_MARKET"},
+            {"statistics_marker": "LIVE_STATISTICS"},
+            {"fundamental_marker": "LIVE_FUNDAMENTAL"},
+            {"pattern_marker": "LIVE_PATTERN"},
+        )
+
+        self.assertEqual(result.decision, "BUY")
+        self.assertEqual(result.confidence, 80)
+        self.assertFalse(responses.kwargs["store"])
+        self.assertEqual(
+            responses.kwargs["max_output_tokens"],
+            settings.OPENAI_MAX_OUTPUT_TOKENS,
+        )
+        output_format = responses.kwargs["text"]["format"]
+        self.assertEqual(output_format["type"], "json_schema")
+        self.assertTrue(output_format["strict"])
+        self.assertFalse(output_format["schema"]["additionalProperties"])
+        self.assertEqual(
+            output_format["schema"]["properties"]["decision"]["enum"],
+            ["BUY", "SELL", "NONE"],
+        )
+        for marker in (
+            "LIVE_MARKET",
+            "LIVE_STATISTICS",
+            "LIVE_FUNDAMENTAL",
+            "LIVE_PATTERN",
+        ):
+            self.assertIn(marker, responses.kwargs["input"])
+
+    async def test_ai_incomplete_response_fails_closed(self):
+        class Responses:
+            async def create(self, **_kwargs):
+                return type(
+                    "Response",
+                    (),
+                    {
+                        "status": "incomplete",
+                        "incomplete_details": type(
+                            "IncompleteDetails",
+                            (),
+                            {"reason": "max_output_tokens"},
+                        )(),
+                        "output_text": "",
+                    },
+                )()
+
+        trader = AITrader()
+        trader.client = type("Client", (), {"responses": Responses()})()
+        result = await trader.decide({}, {}, {}, {})
+        self.assertEqual(result, TraderDecision(decision="NONE", confidence=0))
+
+    async def test_ai_malformed_output_fails_closed(self):
+        class Responses:
+            async def create(self, **_kwargs):
+                return type(
+                    "Response",
+                    (),
+                    {"status": "completed", "output_text": "not-json"},
+                )()
+
+        trader = AITrader()
+        trader.client = type("Client", (), {"responses": Responses()})()
+        result = await trader.decide({}, {}, {}, {})
+        self.assertEqual(result, TraderDecision(decision="NONE", confidence=0))
+
+    async def test_ai_schema_violation_fails_closed(self):
+        class Responses:
+            async def create(self, **_kwargs):
+                return type(
+                    "Response",
+                    (),
+                    {
+                        "status": "completed",
+                        "output_text": json.dumps(
+                            {
+                                "decision": "BUY",
+                                "confidence": "90",
+                                "unexpected": True,
+                            }
+                        ),
+                    },
+                )()
+
+        trader = AITrader()
+        trader.client = type("Client", (), {"responses": Responses()})()
+        result = await trader.decide({}, {}, {}, {})
+        self.assertEqual(result, TraderDecision(decision="NONE", confidence=0))
 
     def test_score_is_sum_of_the_six_declared_weights(self):
         result = ScoringEngine().calculate(market())
@@ -200,13 +322,18 @@ class ApiSecurityTests(unittest.TestCase):
     def setUp(self):
         self.previous_mt5 = settings.RIRI_MT5_API_KEY
         self.previous_dashboard = settings.RIRI_DASHBOARD_API_KEY
+        self.previous_ai_client = api_routes.ai_trader.client
         settings.RIRI_MT5_API_KEY = "m" * 32
         settings.RIRI_DASHBOARD_API_KEY = "d" * 32
+        # Never let an API integration test call the live model merely because
+        # the operator's local or production .env contains OPENAI_API_KEY.
+        api_routes.ai_trader.client = None
         self.client = TestClient(app)
 
     def tearDown(self):
         settings.RIRI_MT5_API_KEY = self.previous_mt5
         settings.RIRI_DASHBOARD_API_KEY = self.previous_dashboard
+        api_routes.ai_trader.client = self.previous_ai_client
 
     def test_dashboard_and_mt5_routes_reject_missing_credentials(self):
         self.assertEqual(self.client.get("/status").status_code, 401)
