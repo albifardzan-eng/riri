@@ -1,5 +1,21 @@
 # Development log
 
+## 2026-09-08 — 1.1.3 billable-AI gate
+
+- Retained ten-second MT5 snapshots while adding a durable 60-second,
+  identity-scoped normal AI interval.
+- Added deterministic two-direction preflight before AI: score, pending signal,
+  cooldown, market quality, position/lot limits, no hedging, and no averaging.
+  AI is not called when no direction could execute.
+- Added material high-impact-news fingerprints. A new event, phase transition,
+  or actual/forecast/previous revision can bypass the normal interval only when
+  a new entry is otherwise legal.
+- Passed currently executable directions into the existing strict AI prompt;
+  backend and MT5 execution rechecks remain authoritative. No threshold, lot,
+  TP/SL, hedging, averaging, or decision reuse rule changed.
+- Added journal/dashboard diagnostics and regression coverage for rate limits,
+  news changes, cooldown, loss-position blocking, and single legal direction.
+
 ## 2026-09-08 — 1.1.2 analysis observability
 
 - Raised the default output-token ceiling to 2048; retained model, timeout,

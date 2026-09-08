@@ -28,6 +28,14 @@ export interface PipelineState {
   completed_at?: string | null
 }
 
+export interface AIGateState {
+  call: boolean
+  reason: string
+  allowed_actions: string[]
+  action_reasons: Record<string, string>
+  news_changed: boolean
+}
+
 export interface RiskDecision {
   approved: boolean
   risk_score: number
@@ -44,6 +52,7 @@ export interface ExecutionResult {
 
 export interface DashboardSnapshot {
   pipeline?: PipelineState
+  ai_gate?: AIGateState
   market?: MarketData
   score?: ScoreResult
   decision?: TraderDecision
@@ -54,6 +63,7 @@ export interface DashboardSnapshot {
 
 export interface JournalRecord {
   pipeline?: PipelineState
+  ai_gate?: AIGateState
   gate_reason?: string
   timestamp?: string
   event?: "ANALYSIS" | "SIGNAL_CREATED" | "TRADE_EXECUTED" | "TRADE_REJECTED" | "TRADE_CLOSED"

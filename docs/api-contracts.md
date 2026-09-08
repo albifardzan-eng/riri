@@ -77,6 +77,30 @@ Every failure/filter returns `decision=NONE, confidence=0`. `reason` is a
 deterministic diagnostic code, **not** an AI-generated strategy explanation.
 The provider's strict JSON schema remains only `decision` and `confidence`.
 
+## AI call gate
+
+MT5 still posts a fresh snapshot every ten seconds. That data-only request is
+not an OpenAI request. Before calling AI, the backend deterministically checks
+the score and whether either direction could create a new order. It skips AI
+for score below 70, pending signals, entry cooldown, exhausted position/lot
+limits, invalid margin/spread/ATR/staleness, and when both directions are
+forbidden by the no-hedging/no-averaging rules.
+
+Normal qualified calls are identity-scoped and limited by
+`AI_MIN_CALL_INTERVAL_SECONDS` (default 60, durable across restart). A material
+USD high-impact-news change may call AI early only after every deterministic
+entry gate passes. Material means event identity, phase, or actual/forecast/
+previous changed; countdown minutes alone do not trigger another call. The AI
+receives only currently executable directions but execution repeats all rules;
+there is no reuse of a prior AI decision or signal.
+
+`ai_gate` in the market snapshot and journal provides `reason`, allowed
+directions, directional block reasons, and whether a news change bypassed the
+normal interval. Common values are `AI_CALLED_INITIAL_QUALIFIED`,
+`AI_CALLED_INTERVAL_ELAPSED`, `AI_CALLED_NEWS_CHANGED`,
+`AI_SKIPPED_SCORE_BELOW_70`, `AI_SKIPPED_SIGNAL_PENDING`,
+`AI_SKIPPED_NO_EXECUTABLE_DIRECTION`, and `AI_SKIPPED_RATE_LIMIT`.
+
 Common reasons: `AI_NO_TRADE`, `AI_DIRECTION_SELECTED`, `CONFIDENCE_BELOW_70`,
 `AI_MAX_OUTPUT_TOKENS`, `AI_EMPTY_OUTPUT`, `AI_INVALID_OUTPUT`, `AI_REFUSAL`,
 `AI_RESPONSE_NOT_COMPLETED`, `AI_TIMEOUT`, `AI_CONNECTION_ERROR`,

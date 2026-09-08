@@ -2,6 +2,7 @@
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, patch
@@ -16,6 +17,9 @@ from models.trader_decision import TraderDecision
 from security import MT5Identity
 from services.market_store import MarketStore
 from services.trade_journal import TradeJournal
+from services.ai_call_gate import AICallGate
+from services.entry_eligibility import eligible_actions
+from services.signal_store import signal_store
 from trader.trader import AITrader
 
 
@@ -104,12 +108,19 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         self.store = MarketStore(self.directory.name)
         self.journal = TradeJournal(self.directory.name)
-        for name, value in [("market_store", self.store), ("trade_journal", self.journal)]:
+        self.ai_gate = AICallGate(self.directory.name, interval_seconds=60)
+        for name, value in [
+            ("market_store", self.store),
+            ("trade_journal", self.journal),
+            ("ai_call_gate", self.ai_gate),
+        ]:
             patcher = patch.object(routes, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
         self.market = fixtures.market(account_id="observability")
         self.key = self.market.identity_key
+        signal_store.clear(self.key)
+        self.addCleanup(signal_store.clear, self.key)
         score = fixtures.ScoringEngine().calculate(self.market).model_copy(update={"score": 85, "qualified": True})
         patcher = patch.object(routes.scoring_engine, "calculate", return_value=score)
         self.calculate = patcher.start()
@@ -152,21 +163,65 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["gate_reason"], "SCORE_BELOW_THRESHOLD")
 
     async def test_cooldown_skip_never_calls_ai(self):
-        with patch.object(routes, "cooldown_status", return_value=(False, "MIN_ENTRY_INTERVAL")), \
-             patch.object(routes.ai_trader, "decide", new=AsyncMock()) as decide:
+        position = {
+            "ticket": 1, "symbol": "XAUUSD", "type": "BUY", "lot": 0.01,
+            "profit": 1.0, "open_time": int(time.time()), "open_price": 2300.0,
+            "sl": 2270.0, "tp": 2310.0, "magic_number": 20260701,
+        }
+        self.market = fixtures.market(account_id="observability", positions=[position])
+        with patch.object(routes.ai_trader, "decide", new=AsyncMock()) as decide:
             result = await self.run_cycle()
         decide.assert_not_called()
         self.assertEqual(result["pipeline"]["reason"], "MIN_ENTRY_INTERVAL")
+        self.assertEqual(result["ai_gate"]["reason"], "AI_SKIPPED_NO_EXECUTABLE_DIRECTION")
 
     async def test_spread_still_blocks_a_valid_sell(self):
         self.market = fixtures.market(account_id="observability", ask=2310.31, spread=31)
-        with patch.object(routes.ai_trader, "decide", new=AsyncMock(return_value=TraderDecision(
-            decision="SELL", confidence=70, status="COMPLETED", reason="AI_DIRECTION_SELECTED",
-        ))):
+        with patch.object(routes.ai_trader, "decide", new=AsyncMock()) as decide:
             result = await self.run_cycle()
-        self.assertEqual(result["pipeline"]["status"], "COMPLETED")
-        self.assertEqual(result["risk"]["reason"], "SPREAD_ABOVE_LIMIT")
-        self.assertFalse(result["execution"]["signal_created"])
+        decide.assert_not_called()
+        self.assertEqual(result["pipeline"]["status"], "SKIPPED")
+        self.assertEqual(result["gate_reason"], "SPREAD_ABOVE_LIMIT")
+
+    async def test_loss_position_with_no_legal_direction_skips_ai(self):
+        position = {
+            "ticket": 1, "symbol": "XAUUSD", "type": "BUY", "lot": 0.01,
+            "profit": -1.0, "open_time": int(time.time()) - 3600, "open_price": 2300.0,
+            "sl": 2270.0, "tp": 2310.0, "magic_number": 20260701,
+        }
+        self.market = fixtures.market(account_id="observability", positions=[position])
+        with patch.object(routes.ai_trader, "decide", new=AsyncMock()) as decide:
+            result = await self.run_cycle()
+        decide.assert_not_called()
+        self.assertEqual(result["gate_reason"], "NO_EXECUTABLE_DIRECTION")
+        self.assertEqual(result["ai_gate"]["action_reasons"], {
+            "BUY": "AVERAGING_FORBIDDEN", "SELL": "HEDGING_FORBIDDEN",
+        })
+
+    async def test_profitable_position_calls_ai_only_for_legal_direction(self):
+        position = {
+            "ticket": 1, "symbol": "XAUUSD", "type": "BUY", "lot": 0.01,
+            "profit": 1.0, "open_time": int(time.time()) - 3600, "open_price": 2300.0,
+            "sl": 2270.0, "tp": 2310.0, "magic_number": 20260701,
+        }
+        self.market = fixtures.market(account_id="observability", positions=[position])
+        decide = AsyncMock(return_value=TraderDecision(
+            decision="BUY", confidence=70, status="COMPLETED", reason="AI_DIRECTION_SELECTED",
+        ))
+        with patch.object(routes.ai_trader, "decide", new=decide):
+            await self.run_cycle()
+        self.assertEqual(decide.await_args.kwargs["allowed_actions"], ("BUY",))
+
+    async def test_rate_limit_skips_second_qualified_snapshot(self):
+        decide = AsyncMock(return_value=TraderDecision(
+            decision="NONE", confidence=0, status="COMPLETED", reason="AI_NO_TRADE",
+        ))
+        with patch.object(routes.ai_trader, "decide", new=decide):
+            first = await self.run_cycle()
+            second = await self.run_cycle()
+        self.assertTrue(first["ai_gate"]["call"])
+        self.assertEqual(second["ai_gate"]["reason"], "AI_SKIPPED_RATE_LIMIT")
+        self.assertEqual(decide.await_count, 1)
 
     async def test_old_cycle_cannot_overwrite_new_snapshot_or_execute(self):
         async def decide(**kwargs):
@@ -208,3 +263,30 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.store.update_stage(self.key, "pipeline", {"status": "ERROR"}, cycle_id=old))
         self.assertTrue(second.update_stage(self.key, "score", {"score": 85}, cycle_id=new))
         self.assertEqual(self.store.snapshot(self.key)["pipeline"]["cycle_id"], new)
+
+
+class AICallGateTests(unittest.TestCase):
+    def test_news_change_overrides_interval_but_not_every_clock_tick(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = AICallGate(directory, interval_seconds=60)
+            upcoming = {
+                "high_impact_news": True, "event_id": 7, "event": "CPI",
+                "currency": "USD", "impact": "HIGH", "phase": "UPCOMING",
+                "actual": None, "forecast": 3.0, "previous": 3.1,
+            }
+            self.assertEqual(gate.claim("a", upcoming, now=100).reason, "AI_CALLED_INITIAL_QUALIFIED")
+            self.assertEqual(gate.claim("a", upcoming, now=110).reason, "AI_SKIPPED_RATE_LIMIT")
+            released = {**upcoming, "phase": "RELEASED", "actual": 3.4}
+            self.assertEqual(gate.claim("a", released, now=111).reason, "AI_CALLED_NEWS_CHANGED")
+            self.assertEqual(gate.claim("a", released, now=112).reason, "AI_SKIPPED_RATE_LIMIT")
+            self.assertEqual(gate.claim("a", released, now=171).reason, "AI_CALLED_INTERVAL_ELAPSED")
+
+    def test_eligibility_does_not_decide_direction(self):
+        position = {
+            "ticket": 1, "symbol": "XAUUSD", "type": "SELL", "lot": 0.01,
+            "profit": 2.0, "open_time": int(time.time()) - 3600, "open_price": 2300.0,
+            "sl": 2330.0, "tp": 2290.0, "magic_number": 20260701,
+        }
+        result = eligible_actions(fixtures.market(positions=[position]))
+        self.assertEqual(result.allowed_actions, ("SELL",))
+        self.assertEqual(result.action_reasons, {"BUY": "HEDGING_FORBIDDEN"})

@@ -15,7 +15,7 @@ class MarketStore:
 
     STAGES = {
         "market", "score", "statistics", "fundamental", "pattern",
-        "decision", "risk", "execution", "journal", "pipeline",
+        "decision", "risk", "execution", "journal", "pipeline", "ai_gate",
     }
 
     def __init__(self, path: str | Path | None = None) -> None:

@@ -81,7 +81,8 @@ class AITrader:
         market,
         statistics,
         fundamental,
-        pattern
+        pattern,
+        allowed_actions=("BUY", "SELL"),
     ) -> TraderDecision:
 
         started = time.monotonic()
@@ -137,6 +138,10 @@ class AITrader:
                 pattern
             )
         )
+        allowed_actions = tuple(action for action in allowed_actions if action in {"BUY", "SELL"})
+        if not allowed_actions:
+            raise ValueError("AITrader requires at least one executable action")
+        executable_actions = ", ".join(allowed_actions)
 
         prompt = f"""
 You are RIRI, an institutional XAUUSD short-term trading AI.
@@ -180,6 +185,17 @@ LIVE PATTERN DATA
 ==================================================
 
 {pattern_json}
+
+==================================================
+EXECUTABLE DIRECTIONS
+==================================================
+
+The deterministic risk rules permit new entries only for:
+
+{executable_actions}
+
+Do not choose any other direction. Choose NONE when the
+permitted direction has no sufficiently strong edge.
 
 ==================================================
 CORE ANALYSIS

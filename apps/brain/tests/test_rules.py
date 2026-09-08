@@ -191,6 +191,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             "LIVE_PATTERN",
         ):
             self.assertIn(marker, responses.kwargs["input"])
+        self.assertIn("EXECUTABLE DIRECTIONS", responses.kwargs["input"])
+        self.assertIn("BUY, SELL", responses.kwargs["input"])
 
     async def test_ai_incomplete_response_fails_closed(self):
         class Responses:

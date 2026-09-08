@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from config.settings import settings
-from config.trading_config import MAX_ACTIVE_TRADES, MIN_ENTRY_INTERVAL_SECONDS, SL_POINTS, TP_POINTS
+from config.trading_config import SL_POINTS, TP_POINTS
 from models.execution import ExecutionConfirmation, TradeCloseEvent
 from models.market_data import MarketData
 from models.status import StatusResponse
@@ -16,6 +16,8 @@ from risk.risk import AIRisk
 from scoring.scoring_engine import ScoringEngine
 from security import MT5Identity, require_dashboard, require_mt5
 from services.execution_service import ExecutionService
+from services.ai_call_gate import ai_call_gate
+from services.entry_eligibility import eligible_actions
 from services.market_store import market_store
 from services.signal_store import signal_store
 from services.snapshot_guard import snapshot_guard
@@ -45,20 +47,6 @@ def assert_identity(data: MarketData, identity: MT5Identity) -> None:
         or data.instance_id != identity.instance_id
     ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="body/header identity mismatch")
-
-
-def cooldown_status(data: MarketData) -> tuple[bool, str]:
-    positions = [position for position in data.positions if position.symbol == data.symbol]
-    if len(positions) >= MAX_ACTIVE_TRADES:
-        return False, "MAX_ACTIVE_TRADES"
-    if not positions:
-        return True, "NO_ACTIVE_TRADES"
-    times = [position.open_time for position in positions if position.open_time > 0]
-    if not times:
-        return False, "OPEN_TIME_UNAVAILABLE"
-    if int(time.time()) - max(times) < MIN_ENTRY_INTERVAL_SECONDS:
-        return False, "MIN_ENTRY_INTERVAL"
-    return True, "COOLDOWN_COMPLETE"
 
 
 @router.get("/health")
@@ -136,10 +124,35 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         update(stage, value)
 
     decision = risk = execution = None
-    allowed, gate_reason = cooldown_status(data)
+    eligibility = eligible_actions(data)
+    allowed_actions = eligibility.allowed_actions
+    gate_reason = eligibility.reason
+    ai_gate = {
+        "call": False,
+        "reason": "AI_SKIPPED_NO_EXECUTABLE_DIRECTION",
+        "allowed_actions": list(allowed_actions),
+        "action_reasons": eligibility.action_reasons,
+        "news_changed": False,
+    }
     if not score.qualified:
         gate_reason = "SCORE_BELOW_THRESHOLD"
-    if score.qualified and allowed:
+        ai_gate["reason"] = "AI_SKIPPED_SCORE_BELOW_70"
+    elif signal_store.get_signal(key) is not None:
+        gate_reason = "SIGNAL_PENDING"
+        ai_gate["reason"] = "AI_SKIPPED_SIGNAL_PENDING"
+    elif allowed_actions:
+        gate_result = ai_call_gate.claim(key, fundamental)
+        ai_gate.update(
+            call=gate_result.call,
+            reason=gate_result.reason,
+            news_changed=gate_result.news_changed,
+        )
+        if not gate_result.call:
+            gate_reason = gate_result.reason
+
+    update("ai_gate", ai_gate)
+
+    if score.qualified and allowed_actions and ai_gate["call"]:
         update("pipeline", {"stage": "AI"})
         market_context = data.model_dump()
         market_context["target"] = {
@@ -155,6 +168,7 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
             statistics=statistics,
             fundamental=fundamental,
             pattern=pattern,
+            allowed_actions=allowed_actions,
         )
         update("decision", decision)
         update("pipeline", {"stage": "RISK"})
@@ -163,8 +177,11 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         update("pipeline", {"stage": "EXECUTION"})
         execution = await execution_service.execute(decision=decision, risk=risk, market=data)
         update("execution", execution)
-    elif score.qualified:
-        logger.info(f"AI Trader skipped for {key}: {gate_reason}")
+    else:
+        if score.qualified and not allowed_actions and gate_reason == "PASS":
+            gate_reason = "NO_EXECUTABLE_DIRECTION"
+        if score.qualified:
+            logger.info(f"AI Trader skipped for {key}: {ai_gate['reason']} ({gate_reason})")
 
     pipeline = {"cycle_id": cycle_id, "status": "COMPLETED", "stage": "DONE", "reason": None}
     if decision is None:
@@ -181,6 +198,7 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         symbol=data.symbol,
         market_time=data.market_time,
         gate_reason=gate_reason,
+        ai_gate=ai_gate,
         pipeline=pipeline,
         score=serialize(score),
         statistics=statistics,
@@ -198,6 +216,7 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         "score": score.score,
         "qualified": score.qualified,
         "gate_reason": gate_reason,
+        "ai_gate": ai_gate,
         "pipeline": pipeline,
         "decision": serialize(decision),
         "risk": serialize(risk),

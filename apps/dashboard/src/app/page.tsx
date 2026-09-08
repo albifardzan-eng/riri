@@ -41,6 +41,7 @@ export default async function Home() {
         <DashboardCard title="Risk" value={snapshot.risk?.approved ? "APPROVED" : snapshot.risk?.reason ?? "-"} />
         <DashboardCard title="Pipeline" value={snapshot.pipeline ? `${snapshot.pipeline.status} · ${snapshot.pipeline.stage}` : "UNKNOWN"} />
         <DashboardCard title="AI Status" value={snapshot.decision?.status ?? (snapshot.pipeline?.status === "PROCESSING" ? "PENDING" : snapshot.pipeline?.status === "SKIPPED" ? "NOT_CALLED" : "UNKNOWN")} />
+        <DashboardCard title="AI Gate" value={snapshot.ai_gate?.reason ?? "UNKNOWN"} />
         <DashboardCard title="Analysis Reason" value={snapshot.pipeline?.reason || snapshot.decision?.reason || "-"} />
         <DashboardCard title="AI Output Tokens" value={snapshot.decision?.output_tokens ?? "-"} />
       </div>
