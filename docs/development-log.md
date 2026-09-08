@@ -1,5 +1,16 @@
 # Development log
 
+## 2026-09-08 — 1.1.4 per-identity pipeline serialization
+
+- Serialized MT5 analysis by account/terminal/instance identity. A snapshot
+  arriving while a qualified AI call is running now waits its turn rather than
+  replacing the active pipeline cycle and causing a completed decision to fail
+  with `409 CYCLE_SUPERSEDED`.
+- Snapshot freshness is rechecked after waiting. Delayed input fails closed
+  after `MAX_MARKET_AGE_SECONDS`; distinct identities are not blocked.
+- AI-call gating, strict output validation and every locked execution/risk rule
+  remain unchanged.
+
 ## 2026-09-08 — 1.1.3 billable-AI gate
 
 - Retained ten-second MT5 snapshots while adding a durable 60-second,

@@ -236,6 +236,38 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("decision", self.store.snapshot(self.key))
         self.assertEqual(self.store.snapshot(self.key)["pipeline"]["stage"], "RESEARCH")
 
+    async def test_same_identity_waits_for_inflight_analysis(self):
+        first = fixtures.market(account_id="serialized", market_time=int(time.time()) - 1)
+        second = first.model_copy(update={"market_time": int(time.time())})
+        identity = MT5Identity(
+            account_id=first.account_id,
+            terminal_id=first.terminal_id,
+            instance_id=first.instance_id,
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+        observed = []
+
+        async def analyze(data, key, _cycle_id):
+            observed.append(data.market_time)
+            if len(observed) == 1:
+                started.set()
+                await release.wait()
+            return {"market_time": data.market_time}
+
+        with patch.object(routes.snapshot_guard, "accept", return_value=True), \
+             patch.object(routes, "analyze_market_cycle", side_effect=analyze):
+            first_task = asyncio.create_task(routes.receive_market_data(first, identity))
+            await started.wait()
+            second_task = asyncio.create_task(routes.receive_market_data(second, identity))
+            await asyncio.sleep(0)
+            self.assertEqual(self.store.get_stage("market", first.identity_key)["market_time"], first.market_time)
+            release.set()
+            results = await asyncio.gather(first_task, second_task)
+
+        self.assertEqual(observed, [first.market_time, second.market_time])
+        self.assertEqual([result["market_time"] for result in results], observed)
+
     async def test_unexpected_pipeline_failure_is_recorded(self):
         identity = MT5Identity(account_id=self.market.account_id, terminal_id=self.market.terminal_id,
                                instance_id=self.market.instance_id)

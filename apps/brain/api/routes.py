@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -34,6 +35,12 @@ pattern_service = PatternService()
 ai_trader = AITrader()
 ai_risk = AIRisk()
 execution_service = ExecutionService()
+
+# MT5 can submit a newer snapshot while a qualified snapshot is waiting for
+# the model. Serialize only each account/terminal/instance pipeline so that a
+# newer request cannot replace the durable cycle underneath an in-flight
+# decision. Distinct identities remain independent.
+_pipeline_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 def serialize(value: Any) -> Any:
@@ -80,32 +87,35 @@ async def application_status():
 async def receive_market_data(data: MarketData, identity: MT5Identity = Depends(require_mt5)):
     assert_identity(data, identity)
     key = identity.key
-    market_age = int(time.time()) - data.market_time
-    if market_age < 0 or market_age > settings.MAX_MARKET_AGE_SECONDS:
-        raise HTTPException(status_code=422, detail="stale or future market snapshot")
-    if not snapshot_guard.accept(key, data.market_time):
-        raise HTTPException(status_code=409, detail="replayed or out-of-order market snapshot")
-    cycle_id = market_store.begin_cycle(key, data)
-    try:
-        return await analyze_market_cycle(data, key, cycle_id)
-    except (Exception, asyncio.CancelledError) as exc:
-        reason = "CYCLE_SUPERSEDED" if isinstance(exc, HTTPException) and exc.status_code == 409 else "PIPELINE_ERROR"
-        if isinstance(exc, asyncio.CancelledError):
-            reason = "PIPELINE_INTERRUPTED"
-        pipeline = {
-            "status": "SKIPPED" if reason == "CYCLE_SUPERSEDED" else "ERROR",
-            "stage": "STOPPED", "reason": reason,
-        }
-        market_store.update_stage(key, "pipeline", pipeline, cycle_id=cycle_id)
-        trade_journal.event(
-            "ANALYSIS", account_id=data.account_id, terminal_id=data.terminal_id,
-            instance_id=data.instance_id, symbol=data.symbol, market_time=data.market_time,
-            pipeline={**pipeline, "cycle_id": cycle_id}, gate_reason=reason,
-        )
-        logger.warning(f"Market pipeline stopped: {reason}")
-        if isinstance(exc, (HTTPException, asyncio.CancelledError)):
-            raise
-        raise HTTPException(status_code=503, detail="market analysis failed") from None
+    async with _pipeline_locks[key]:
+        # Check age after queueing: a delayed snapshot must fail closed rather
+        # than run after a previous AI call has completed.
+        market_age = int(time.time()) - data.market_time
+        if market_age < 0 or market_age > settings.MAX_MARKET_AGE_SECONDS:
+            raise HTTPException(status_code=422, detail="stale or future market snapshot")
+        if not snapshot_guard.accept(key, data.market_time):
+            raise HTTPException(status_code=409, detail="replayed or out-of-order market snapshot")
+        cycle_id = market_store.begin_cycle(key, data)
+        try:
+            return await analyze_market_cycle(data, key, cycle_id)
+        except (Exception, asyncio.CancelledError) as exc:
+            reason = "CYCLE_SUPERSEDED" if isinstance(exc, HTTPException) and exc.status_code == 409 else "PIPELINE_ERROR"
+            if isinstance(exc, asyncio.CancelledError):
+                reason = "PIPELINE_INTERRUPTED"
+            pipeline = {
+                "status": "SKIPPED" if reason == "CYCLE_SUPERSEDED" else "ERROR",
+                "stage": "STOPPED", "reason": reason,
+            }
+            market_store.update_stage(key, "pipeline", pipeline, cycle_id=cycle_id)
+            trade_journal.event(
+                "ANALYSIS", account_id=data.account_id, terminal_id=data.terminal_id,
+                instance_id=data.instance_id, symbol=data.symbol, market_time=data.market_time,
+                pipeline={**pipeline, "cycle_id": cycle_id}, gate_reason=reason,
+            )
+            logger.warning(f"Market pipeline stopped: {reason}")
+            if isinstance(exc, (HTTPException, asyncio.CancelledError)):
+                raise
+            raise HTTPException(status_code=503, detail="market analysis failed") from None
 
 
 async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
