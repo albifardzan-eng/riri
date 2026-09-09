@@ -92,7 +92,7 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
    }
    if(signal.confidence < RIRI_MIN_CONFIDENCE)
    {
-      reason = "CONFIDENCE_BELOW_70";
+      reason = "CONFIDENCE_BELOW_60";
       return false;
    }
    if(signal.tp_points != RIRI_TP_POINTS || signal.sl_points != RIRI_SL_POINTS)
@@ -153,8 +153,9 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
       reason = "INVALID_EQUITY";
       return false;
    }
-   double policy_lot = RIRI_DEFAULT_LOT +
-      MathFloor(equity / RIRI_EQUITY_STEP) * RIRI_LOT_STEP;
+   double policy_lot = signal.confidence < RIRI_STANDARD_CONFIDENCE
+      ? RIRI_REDUCED_CONFIDENCE_LOT
+      : RIRI_DEFAULT_LOT + MathFloor(equity / RIRI_EQUITY_STEP) * RIRI_LOT_STEP;
    double remaining_lot = MathMax(0.0, RIRI_MAX_TOTAL_LOT - active_lot);
    remaining_lot = MathFloor((remaining_lot + 1e-9) * 100.0) / 100.0;
    policy_lot = MathMin(policy_lot, remaining_lot);
@@ -257,6 +258,13 @@ bool RIRI_SendOrder(const RiriSignal &signal, double lot)
       result.retcode,
       result.comment
    );
+   Print("[EXECUTION] signal=", signal.signal_id,
+      " action=", signal.action,
+      " confidence=", signal.confidence,
+      " lot=", DoubleToString(lot, 2),
+      " result=", filled ? "EXECUTED" : "REJECTED",
+      " retcode=", result.retcode,
+      " reason=", result.comment);
    return filled;
 }
 
@@ -271,7 +279,11 @@ bool ExecuteSignal()
    string reason = "";
    if(!RIRI_ValidateSignal(signal, lot, reason))
    {
-      Print("[EXECUTION] rejected signal=", signal.signal_id, " reason=", reason);
+      Print("[EXECUTION] rejected signal=", signal.signal_id,
+         " action=", signal.action,
+         " confidence=", signal.confidence,
+         " requested_lot=", DoubleToString(signal.lot, 2),
+         " reason=", reason);
       ConfirmSignal(signal, "REJECTED", 0, 0, 0, 0, 0, reason);
       return false;
    }

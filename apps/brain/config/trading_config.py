@@ -11,7 +11,12 @@ SYMBOL = "XAUUSD"
 
 MIN_SCORE = 70
 
-MIN_CONFIDENCE = 70
+# A directional decision must be more likely than not to reach TP before SL.
+# 60-69 is permitted only with the reduced fixed lot below. 70+ keeps the
+# normal equity-based sizing formula.
+MIN_CONFIDENCE = 60
+STANDARD_CONFIDENCE = 70
+REDUCED_CONFIDENCE_LOT = 0.01
 
 
 # ==================================================

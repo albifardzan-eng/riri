@@ -35,7 +35,8 @@ class DecisionDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_none_and_filtered_are_not_api_errors(self):
         for direction, confidence, expected in [
             ("NONE", 80, ("NONE", 0, "COMPLETED", "AI_NO_TRADE")),
-            ("BUY", 69, ("NONE", 0, "FILTERED", "CONFIDENCE_BELOW_70")),
+            ("BUY", 59, ("NONE", 0, "FILTERED", "CONFIDENCE_BELOW_60")),
+            ("BUY", 60, ("BUY", 60, "COMPLETED", "AI_DIRECTION_SELECTED_REDUCED_RISK")),
             ("SELL", 70, ("SELL", 70, "COMPLETED", "AI_DIRECTION_SELECTED")),
         ]:
             with self.subTest(direction=direction):
@@ -144,6 +145,21 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(snapshot["pipeline"]["completed_at"])
         self.assertEqual(snapshot["journal"]["decision"]["reason"], "AI_NO_TRADE")
         self.assertFalse(result["execution"]["signal_created"])
+
+    async def test_response_contains_flat_mt5_analysis_telemetry(self):
+        decision = TraderDecision(
+            decision="BUY", confidence=60, status="COMPLETED",
+            reason="AI_DIRECTION_SELECTED_REDUCED_RISK",
+        )
+        with patch.object(routes.ai_trader, "decide", new=AsyncMock(return_value=decision)):
+            result = await self.run_cycle()
+        self.assertTrue(result["ai_called"])
+        self.assertEqual(result["ai_decision"], "BUY")
+        self.assertEqual(result["ai_confidence"], 60)
+        self.assertEqual(result["ai_status"], "COMPLETED")
+        self.assertEqual(result["ai_reason"], "AI_DIRECTION_SELECTED_REDUCED_RISK")
+        self.assertTrue(result["risk_approved"])
+        self.assertEqual(result["signal_lot"], 0.01)
 
     async def test_ai_error_has_terminal_error_not_normal_no_signal(self):
         with patch.object(routes.ai_trader, "decide", new=AsyncMock(return_value=TraderDecision(

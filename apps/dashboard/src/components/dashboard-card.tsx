@@ -1,6 +1,8 @@
 interface Props {
   title: string
   value: string | number
+  detail?: string
+  tone?: "neutral" | "good" | "warn" | "danger"
 }
 
 export default function DashboardCard(
@@ -8,15 +10,16 @@ export default function DashboardCard(
 ) {
 
   return (
-    <div className="rounded-xl border p-4">
+    <div className={`metric-card metric-${props.tone ?? "neutral"}`}>
 
-      <div className="text-sm text-gray-500">
+      <div className="metric-title">
         {props.title}
       </div>
 
-      <div className="text-2xl font-bold">
+      <div className="metric-value">
         {props.value}
       </div>
+      {props.detail && <div className="metric-detail">{props.detail}</div>}
 
     </div>
   )

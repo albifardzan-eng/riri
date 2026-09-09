@@ -1,9 +1,12 @@
 import type { DashboardSnapshot, JournalRecord } from "@/types/dashboard"
 
-const API_URL = process.env.RIRI_API_URL || "http://localhost:8000"
+const API_URL = (process.env.RIRI_API_URL || "").replace(/\/$/, "")
 const DASHBOARD_TOKEN = process.env.RIRI_DASHBOARD_API_KEY || ""
 
 async function request<T>(endpoint: string): Promise<T> {
+  if (!API_URL) {
+    throw new Error("RIRI_API_URL is not configured")
+  }
   if (!DASHBOARD_TOKEN) {
     throw new Error("RIRI_DASHBOARD_API_KEY is not configured")
   }

@@ -13,7 +13,7 @@ class AIRisk:
         if trader_decision is None or trader_decision.decision == "NONE":
             return self._reject("NO_SIGNAL")
         if trader_decision.confidence < MIN_CONFIDENCE:
-            return self._reject("CONFIDENCE_BELOW_70")
+            return self._reject("CONFIDENCE_BELOW_60")
         if market.symbol != "XAUUSD":
             return self._reject("SYMBOL_NOT_ALLOWED")
 

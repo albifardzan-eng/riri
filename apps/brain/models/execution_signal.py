@@ -12,7 +12,7 @@ class ExecutionSignal(BaseModel):
     lot: float = Field(gt=0, le=0.50)
     tp_points: int
     sl_points: int
-    confidence: int = Field(ge=70, le=100)
+    confidence: int = Field(ge=60, le=100)
     account_id: str
     terminal_id: str
     instance_id: str

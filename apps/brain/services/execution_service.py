@@ -6,6 +6,7 @@ from config.settings import settings
 from config.trading_config import (
     DEFAULT_LOT, EQUITY_STEP, LOT_STEP, MAX_ACTIVE_TRADES, MAX_TOTAL_LOT,
     MAX_SPREAD, MIN_ATR, MIN_CONFIDENCE, MIN_ENTRY_INTERVAL_SECONDS,
+    REDUCED_CONFIDENCE_LOT, STANDARD_CONFIDENCE,
     SL_POINTS, TP_POINTS,
 )
 from models.execution import ExecutionResult
@@ -26,7 +27,13 @@ class ExecutionService:
 
         positions = [position for position in market.positions if position.symbol == market.symbol]
         active_lot = sum(float(position.lot) for position in positions)
-        lot = round(DEFAULT_LOT + math.floor(market.equity / EQUITY_STEP) * LOT_STEP, 2)
+        # A 60-69 probability is an executable but reduced-risk setup. It
+        # never receives the normal equity-based size. 70+ retains the locked
+        # sizing formula unchanged.
+        if decision.confidence < STANDARD_CONFIDENCE:
+            lot = REDUCED_CONFIDENCE_LOT
+        else:
+            lot = round(DEFAULT_LOT + math.floor(market.equity / EQUITY_STEP) * LOT_STEP, 2)
         remaining_lot = max(0.0, MAX_TOTAL_LOT - active_lot)
         remaining_lot = math.floor((remaining_lot + 1e-9) * 100) / 100
         lot = min(lot, remaining_lot, MAX_TOTAL_LOT)
@@ -67,7 +74,7 @@ class ExecutionService:
         if decision.decision not in {"BUY", "SELL"}:
             return "NO_SIGNAL"
         if decision.confidence < MIN_CONFIDENCE:
-            return "CONFIDENCE_BELOW_70"
+            return "CONFIDENCE_BELOW_60"
         if risk is None or not risk.approved:
             return "RISK_REJECTED"
         if market.symbol != "XAUUSD":

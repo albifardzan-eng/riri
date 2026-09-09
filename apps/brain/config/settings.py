@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "RIRI"
 
-    APP_VERSION: str = "1.1.4"
+    APP_VERSION: str = "1.2.0"
 
     SIGNAL_EXPIRY_SECONDS: int = 60
     SIGNAL_DELIVERY_LEASE_SECONDS: int = 15

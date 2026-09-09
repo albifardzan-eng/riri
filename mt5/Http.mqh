@@ -108,10 +108,38 @@ double RIRI_JsonNumber(string json, string key, double fallback = 0.0)
 }
 
 
+bool RIRI_JsonBool(string json, string key, bool fallback = false)
+{
+   string token = "\"" + key + "\":";
+   int start = StringFind(json, token);
+   if(start < 0)
+      return fallback;
+   start += StringLen(token);
+   return StringSubstr(json, start, 4) == "true" ? true :
+      StringSubstr(json, start, 5) == "false" ? false : fallback;
+}
+
+
+void RIRI_PrintAnalysis(string response)
+{
+   Print("[ANALYSIS] score=", (int)RIRI_JsonNumber(response, "score", -1),
+      " qualified=", RIRI_JsonBool(response, "qualified") ? "true" : "false",
+      " ai_called=", RIRI_JsonBool(response, "ai_called") ? "true" : "false",
+      " gate=", RIRI_JsonString(response, "ai_gate_reason"),
+      " decision=", RIRI_JsonString(response, "ai_decision"),
+      " confidence=", (int)RIRI_JsonNumber(response, "ai_confidence", 0),
+      " risk=", RIRI_JsonString(response, "risk_reason"),
+      " execution=", RIRI_JsonString(response, "execution_reason"),
+      " signal_lot=", DoubleToString(RIRI_JsonNumber(response, "signal_lot", 0.0), 2));
+}
+
+
 bool SendMarket()
 {
    string response;
    int code = HttpPost(MARKET_ENDPOINT, BuildMarketJson(), response);
+   if(code >= 200 && code < 300)
+      RIRI_PrintAnalysis(response);
    return code >= 200 && code < 300;
 }
 

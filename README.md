@@ -12,9 +12,9 @@ RIRI is an account-scoped XAUUSD trading pipeline:
 - Maximum active XAUUSD positions visible to the EA: 3
 - Maximum combined XAUUSD volume visible to the EA: 0.50 lot
 - No hedging, martingale, or averaging into a losing position
-- Lot: 0.01 plus 0.01 for each complete USD 500 of equity, constrained by remaining exposure
+- Confidence 60-69: a reduced fixed 0.01 lot; confidence 70+: 0.01 plus 0.01 for each complete USD 500 of equity, constrained by remaining exposure
 - Score below 70: AI Trader is not called
-- AI confidence below 70: no signal
+- AI confidence below 60: no signal; confidence is the conservative probability that TP is reached before SL
 - Maximum spread: 30 points; minimum ATR: 1.0
 
 ## Repository

@@ -17,7 +17,7 @@ Dashboard endpoints require `Authorization: Bearer <RIRI_DASHBOARD_API_KEY>`. `G
 
 Strict snapshot fields include identity, `XAUUSD`, timeframe, UTC market timestamp, bid/ask/spread, point/digits/tick metadata, account balances, closed candles, all visible XAUUSD positions (including magic number), and fundamental availability/event data. Unknown fields are rejected. Header and body identity must match.
 
-A successful response describes scoring and current pipeline outcomes. HTTP 200 does not mean a trade exists; inspect `qualified`, `decision`, `risk`, and `execution`.
+A successful response describes scoring and current pipeline outcomes. HTTP 200 does not mean a trade exists; inspect `qualified`, `decision`, `risk`, and `execution`. It also includes flat MT5-safe telemetry (`ai_called`, `ai_gate_reason`, `ai_decision`, `ai_confidence`, `ai_status`, `ai_reason`, `risk_approved`, `risk_reason`, `execution_reason`, `signal_lot`) for the EA Expert log.
 
 Since 1.1.2, responses and analysis journal records also carry `pipeline`
 (`cycle_id`, `status`, `stage`, `reason`). A superseded analysis returns HTTP 409
@@ -71,7 +71,7 @@ confirmed normal NONE. A hard process kill cannot write an interruption marker;
 check timestamps and service health if a PROCESSING row stops updating.
 
 `decision.status` is backend-generated: `COMPLETED` for valid model output,
-`FILTERED` for directional confidence below 70, `ERROR` for provider/output
+`FILTERED` for directional confidence below 60, `ERROR` for provider/output
 failure, `UNAVAILABLE` when not configured, and `UNKNOWN` for legacy data.
 Every failure/filter returns `decision=NONE, confidence=0`. `reason` is a
 deterministic diagnostic code, **not** an AI-generated strategy explanation.
@@ -101,7 +101,13 @@ normal interval. Common values are `AI_CALLED_INITIAL_QUALIFIED`,
 `AI_SKIPPED_SCORE_BELOW_70`, `AI_SKIPPED_SIGNAL_PENDING`,
 `AI_SKIPPED_NO_EXECUTABLE_DIRECTION`, and `AI_SKIPPED_RATE_LIMIT`.
 
-Common reasons: `AI_NO_TRADE`, `AI_DIRECTION_SELECTED`, `CONFIDENCE_BELOW_70`,
+Confidence is a conservative estimate that the fixed 1,000-point TP is reached
+before the fixed 3,000-point SL from the current price. Confidence 60-69 can
+create only a fixed 0.01-lot signal; confidence 70+ retains normal equity-based
+lot sizing. Below 60 no signal is created.
+
+Common reasons: `AI_NO_TRADE`, `AI_DIRECTION_SELECTED`,
+`AI_DIRECTION_SELECTED_REDUCED_RISK`, `CONFIDENCE_BELOW_60`,
 `AI_MAX_OUTPUT_TOKENS`, `AI_EMPTY_OUTPUT`, `AI_INVALID_OUTPUT`, `AI_REFUSAL`,
 `AI_RESPONSE_NOT_COMPLETED`, `AI_TIMEOUT`, `AI_CONNECTION_ERROR`,
 `AI_ACCESS_DENIED`, `AI_QUOTA_EXHAUSTED`, `AI_RATE_LIMITED`, `AI_API_ERROR`,
@@ -110,7 +116,7 @@ Common reasons: `AI_NO_TRADE`, `AI_DIRECTION_SELECTED`, `CONFIDENCE_BELOW_70`,
 Optional `latency_ms`, `input_tokens`, `output_tokens`, and `reasoning_tokens`
 support diagnosis without exposing prompts or hidden reasoning. Output tokens
 already include reasoning tokens; do not add the two to calculate output usage.
-MT5 signal/ACK contracts and all trading thresholds are unchanged.
+MT5 signal/ACK contracts and all other hard trading thresholds are unchanged.
 
 ## `POST /execution/trade-event`
 

@@ -231,6 +231,19 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         "decision": serialize(decision),
         "risk": serialize(risk),
         "execution": serialize(execution),
+        # Flat, non-sensitive MT5 telemetry. The EA logs this immediately so
+        # an operator can correlate score, AI probability, risk and order
+        # outcome without parsing nested JSON or exposing credentials.
+        "ai_called": ai_gate["call"],
+        "ai_gate_reason": ai_gate["reason"],
+        "ai_decision": decision.decision if decision else "NONE",
+        "ai_confidence": decision.confidence if decision else 0,
+        "ai_status": decision.status if decision else "NOT_CALLED",
+        "ai_reason": decision.reason if decision else gate_reason,
+        "risk_approved": risk.approved if risk else False,
+        "risk_reason": risk.reason if risk else gate_reason,
+        "execution_reason": execution.reason if execution else gate_reason,
+        "signal_lot": execution.lot if execution and execution.signal_created else 0.0,
     }
 
 

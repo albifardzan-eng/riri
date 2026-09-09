@@ -9,6 +9,7 @@ from openai import (
 from config.settings import settings
 from config.trading_config import (
     MIN_CONFIDENCE,
+    STANDARD_CONFIDENCE,
     TP_POINTS,
     SL_POINTS
 )
@@ -373,12 +374,27 @@ The objective is quality, not trade frequency.
 CONFIDENCE
 ==================================================
 
-Confidence = quality of the specific setup.
+Confidence is NOT a generic setup-quality score.
 
-Use the full 0-100 range.
+For BUY or SELL, confidence is your conservative, calibrated
+estimate (0-100) that the fixed {TP_POINTS}-point TP will be
+reached BEFORE the fixed {SL_POINTS}-point SL, from the current
+price and while this signal remains valid.
 
-Higher confidence requires stronger evidence and clearer
-target feasibility.
+50 means no directional edge. Do not return BUY or SELL at 50 or
+below. Use NONE instead.
+
+60-69 means a modest but positive edge. It may be traded only at
+the system's reduced fixed lot; do not inflate the number merely
+to obtain normal sizing.
+
+70 or higher requires clear, mutually reinforcing evidence and a
+realistic path to the target. It is eligible for normal sizing,
+subject to deterministic risk rules.
+
+Calibrate conservatively. Reduce confidence for weak confirmation,
+poor target room, unstable post-news behaviour, or conflicting
+technical and fundamental evidence.
 
 If decision = NONE, confidence MUST be 0.
 
@@ -497,8 +513,13 @@ Only JSON.
             if decision == "NONE":
                 return finish("COMPLETED", "AI_NO_TRADE")
             if confidence < MIN_CONFIDENCE:
-                return finish("FILTERED", "CONFIDENCE_BELOW_70")
-            return finish("COMPLETED", "AI_DIRECTION_SELECTED", decision, confidence)
+                return finish("FILTERED", "CONFIDENCE_BELOW_60")
+            reason = (
+                "AI_DIRECTION_SELECTED_REDUCED_RISK"
+                if confidence < STANDARD_CONFIDENCE
+                else "AI_DIRECTION_SELECTED"
+            )
+            return finish("COMPLETED", reason, decision, confidence)
 
         except (
             json.JSONDecodeError,

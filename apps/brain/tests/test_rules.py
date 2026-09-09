@@ -84,7 +84,7 @@ class RiskRuleTests(unittest.IsolatedAsyncioTestCase):
         cases = [
             (market(ask=2310.31, spread=31), TraderDecision(decision="BUY", confidence=90), "SPREAD_ABOVE_LIMIT"),
             (market(atr=0.9), TraderDecision(decision="BUY", confidence=90), "ATR_BELOW_LIMIT"),
-            (market(), TraderDecision(decision="BUY", confidence=69), "CONFIDENCE_BELOW_70"),
+            (market(), TraderDecision(decision="BUY", confidence=59), "CONFIDENCE_BELOW_60"),
         ]
         for snapshot, decision, expected in cases:
             with self.subTest(expected=expected):
@@ -125,7 +125,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["high_impact_news"])
         self.assertEqual(result["event"], "CPI")
 
-    async def test_ai_confidence_below_threshold_becomes_none(self):
+    async def test_ai_confidence_below_60_becomes_none(self):
         class Responses:
             async def create(self, **_kwargs):
                 return type(
@@ -133,7 +133,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
                     (),
                     {
                         "status": "completed",
-                        "output_text": json.dumps({"decision": "BUY", "confidence": 69}),
+                        "output_text": json.dumps({"decision": "BUY", "confidence": 59}),
                     },
                 )()
 
@@ -193,6 +193,8 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(marker, responses.kwargs["input"])
         self.assertIn("EXECUTABLE DIRECTIONS", responses.kwargs["input"])
         self.assertIn("BUY, SELL", responses.kwargs["input"])
+        self.assertIn("TP will be\nreached BEFORE", responses.kwargs["input"])
+        self.assertIn("60-69 means a modest but positive edge", responses.kwargs["input"])
 
     async def test_ai_incomplete_response_fails_closed(self):
         class Responses:
@@ -278,6 +280,20 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(signal["tp_points"], 1000)
             self.assertEqual(signal["sl_points"], 3000)
             self.assertEqual(signal["account_id"], snapshot.account_id)
+        finally:
+            signal_store.clear(snapshot.identity_key)
+
+    async def test_reduced_confidence_signal_uses_fixed_small_lot(self):
+        snapshot = market(equity=3000.0)
+        result = await ExecutionService().execute(
+            TraderDecision(decision="SELL", confidence=60),
+            RiskDecision(approved=True, risk_score=100, reason="PASS"),
+            snapshot,
+        )
+        try:
+            self.assertTrue(result.signal_created)
+            self.assertEqual(result.lot, 0.01)
+            self.assertEqual(signal_store.get_signal(snapshot.identity_key)["confidence"], 60)
         finally:
             signal_store.clear(snapshot.identity_key)
 
@@ -383,7 +399,9 @@ class CrossRuntimeContractTests(unittest.TestCase):
     def test_mt5_immutable_rules_match_backend(self):
         config = (BRAIN_DIR.parents[1] / "mt5" / "Config.mqh").read_text(encoding="utf-8")
         self.assertIn('const string RIRI_SYMBOL = "XAUUSD";', config)
-        self.assertIn("const int RIRI_MIN_CONFIDENCE = 70;", config)
+        self.assertIn("const int RIRI_MIN_CONFIDENCE = 60;", config)
+        self.assertIn("const int RIRI_STANDARD_CONFIDENCE = 70;", config)
+        self.assertIn("const double RIRI_REDUCED_CONFIDENCE_LOT = 0.01;", config)
         self.assertIn("const int RIRI_TP_POINTS = 1000;", config)
         self.assertIn("const int RIRI_SL_POINTS = 3000;", config)
         self.assertIn("const int RIRI_MAX_ACTIVE_TRADES = 3;", config)
