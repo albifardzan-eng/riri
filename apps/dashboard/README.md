@@ -18,6 +18,8 @@ for Production, Preview, and Development as needed. Redeploy after saving them.
 The dashboard is server-rendered; the API key never reaches the browser. Point
 the `riri.albiagent.com` domain at that Vercel project after a successful build.
 
+Production dashboard release: **v1.2.0**.
+
 ```bash
 npm ci
 npm run dev
