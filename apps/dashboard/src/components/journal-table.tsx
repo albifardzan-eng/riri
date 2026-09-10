@@ -1,9 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { JournalRecord } from "@/types/dashboard"
 
-interface Props { recentRows: JournalRecord[]; tradeRows: JournalRecord[]; tradeHistoryAvailable: boolean }
+interface Props { recentRows: JournalRecord[] }
 
 const localTime = (value?: string) => value ? new Intl.DateTimeFormat("id-ID", {
   timeZone: "Asia/Jakarta", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -39,7 +39,7 @@ function EventTable({ rows }: { rows: JournalRecord[] }) {
   </table>{!rows.length && <div className="table-empty">No lifecycle events yet.</div>}</div>
 }
 
-function TradeTable({ rows, available }: { rows: JournalRecord[]; available: boolean }) {
+function TradeTable({ rows, state, retry }: { rows: JournalRecord[]; state: "idle" | "loading" | "ready" | "error"; retry: () => void }) {
   return <div className="journal-wrap"><table className="journal-table trade-table">
     <thead><tr><th>Time</th><th>Lifecycle</th><th>Side</th><th>Lot</th><th>Price</th><th>Order / deal</th><th>Realized P/L</th></tr></thead>
     <tbody>{rows.map((row, index) => {
@@ -54,16 +54,48 @@ function TradeTable({ rows, available }: { rows: JournalRecord[]; available: boo
         <td className={row.profit === undefined ? "" : row.profit >= 0 ? "profit" : "loss"}>{row.profit === undefined ? "Open" : `${row.profit >= 0 ? "+" : ""}$${row.profit.toFixed(2)}`}</td>
       </tr>
     })}</tbody>
-  </table>{!available && <div className="table-empty table-error">Full trade history is temporarily unavailable.</div>}{available && !rows.length && <div className="table-empty">Belum ada trade yang tercatat.</div>}</div>
+  </table>
+    {state === "loading" && <div className="table-empty">Memuat histori trade…</div>}
+    {state === "error" && <div className="table-empty table-error">Histori trade belum berhasil dimuat. <button type="button" onClick={retry}>Coba lagi</button></div>}
+    {state === "ready" && !rows.length && <div className="table-empty">Belum ada trade yang tercatat.</div>}
+  </div>
 }
 
-export default function JournalTable({ recentRows, tradeRows, tradeHistoryAvailable }: Props) {
+export default function JournalTable({ recentRows }: Props) {
   const [tab, setTab] = useState<"events" | "trades">("events")
+  const [tradeRows, setTradeRows] = useState<JournalRecord[]>([])
+  const [tradeState, setTradeState] = useState<"idle" | "loading" | "ready" | "error">("idle")
+  const tradesInFlight = useRef(false)
+
+  const loadTrades = async () => {
+    if (tradesInFlight.current || tradeState === "ready") return
+    tradesInFlight.current = true
+    setTradeState("loading")
+    try {
+      const response = await fetch("/api/trades", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(18_000),
+      })
+      if (!response.ok) throw new Error(`Trade history returned ${response.status}`)
+      setTradeRows(await response.json() as JournalRecord[])
+      setTradeState("ready")
+    } catch {
+      setTradeState("error")
+    } finally {
+      tradesInFlight.current = false
+    }
+  }
+
+  const selectTrades = () => {
+    setTab("trades")
+    void loadTrades()
+  }
+
   return <div className="journal-panel">
     <div className="journal-tabs" role="tablist" aria-label="Journal view">
       <button type="button" role="tab" aria-selected={tab === "events"} onClick={() => setTab("events")}><span>100 Event Terakhir</span><i>{recentRows.length}</i></button>
-      <button type="button" role="tab" aria-selected={tab === "trades"} onClick={() => setTab("trades")}><span>Histori Trade</span><i>{tradeRows.length}</i></button>
+      <button type="button" role="tab" aria-selected={tab === "trades"} onClick={selectTrades}><span>Histori Trade</span><i>{tradeState === "idle" || tradeState === "loading" ? "…" : tradeRows.length}</i></button>
     </div>
-    <div role="tabpanel">{tab === "events" ? <EventTable rows={recentRows} /> : <TradeTable rows={tradeRows} available={tradeHistoryAvailable} />}</div>
+    <div role="tabpanel">{tab === "events" ? <EventTable rows={recentRows} /> : <TradeTable rows={tradeRows} state={tradeState} retry={() => void loadTrades()} />}</div>
   </div>
 }

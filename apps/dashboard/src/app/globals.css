@@ -49,12 +49,14 @@ button { font: inherit; }
 .connection { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--green); font-size: 12px; font-weight: 700; letter-spacing: .06em; }
 .connection i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 5px rgba(52,211,153,.09); }
 .connection.is-offline { color: var(--red); }
+.connection.is-loading, .connection.is-stale, .connection.is-timeout { color: var(--amber); }
 .refresh-button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; color: var(--muted-strong); font-size: 12px; cursor: pointer; transition: border-color .2s, color .2s; }
 .refresh-button:hover { border-color: #3a4553; color: var(--text); }
 .refresh-button:disabled { cursor: wait; opacity: .65; }
 .refresh-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .alert { margin-top: 20px; padding: 14px 16px; border: 1px solid rgba(251,113,133,.38); border-radius: 12px; background: rgba(251,113,133,.07); color: #fecdd3; font-size: 14px; }
+.alert-warn { border-color: rgba(251,191,36,.32); background: rgba(251,191,36,.06); color: #fde68a; }
 .market-hero { display: grid; grid-template-columns: 1.15fr .8fr 1.5fr; gap: 28px; align-items: center; min-height: 190px; margin-top: 24px; padding: 28px 30px; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(115deg, rgba(17,23,32,.98), rgba(10,14,20,.96)); box-shadow: 0 22px 70px rgba(0,0,0,.22); }
 .market-identity { align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; }
 .symbol-row { gap: 14px; }
@@ -150,6 +152,7 @@ button { font: inherit; }
 .event-signal_created { border-color: rgba(96,165,250,.22); color: var(--blue); }
 .side-buy { border-color: rgba(52,211,153,.25); color: var(--green); }.side-sell { border-color: rgba(251,113,133,.25); color: var(--red); }.side-none, .side-— { color: var(--muted); }
 .table-empty { padding: 34px; color: var(--muted); font-size: 13px; text-align: center; }.table-error { color: var(--red); }
+.table-error button { margin-left: 8px; padding: 6px 9px; border: 1px solid rgba(251,113,133,.35); border-radius: 7px; background: transparent; color: #fecdd3; cursor: pointer; }
 
 footer { display: flex; justify-content: space-between; gap: 18px; margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 12px; }
 

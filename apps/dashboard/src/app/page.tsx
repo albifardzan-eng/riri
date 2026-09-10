@@ -1,9 +1,24 @@
-import JournalTable from "@/components/journal-table"
-import LiveRefresh from "@/components/live-refresh"
-import { getDashboardSnapshot, getFullJournalHistory, getJournalHistory } from "@/lib/api"
-import type { JournalRecord, Tone } from "@/types/dashboard"
+"use client"
 
-export const dynamic = "force-dynamic"
+import { useCallback, useEffect, useRef, useState } from "react"
+import JournalTable from "@/components/journal-table"
+import type { DashboardSnapshot, JournalRecord, Tone } from "@/types/dashboard"
+
+type ConnectionState = "loading" | "live" | "stale" | "timeout" | "offline"
+
+async function browserRequest<T>(endpoint: string, timeoutMs: number): Promise<T> {
+  const response = await fetch(endpoint, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { kind?: string }
+    const error = new Error(`Dashboard proxy returned ${response.status}`)
+    error.name = body.kind === "timeout" || response.status === 504 ? "TimeoutError" : "UpstreamError"
+    throw error
+  }
+  return response.json() as Promise<T>
+}
 
 const number = (value: number | undefined, digits = 2) =>
   value === undefined ? "—" : new Intl.NumberFormat("en-US", {
@@ -59,15 +74,81 @@ function FlowStep({ index, label, value, detail, tone = "neutral" }: {
   )
 }
 
-export default async function Home() {
-  const [snapshotResult, recentResult, fullResult] = await Promise.allSettled([
-    getDashboardSnapshot(), getJournalHistory(), getFullJournalHistory(),
-  ])
+export default function Home() {
+  const [snapshot, setSnapshot] = useState<DashboardSnapshot>({})
+  const [recent, setRecent] = useState<JournalRecord[]>([])
+  const [connection, setConnection] = useState<ConnectionState>("loading")
+  const [seconds, setSeconds] = useState(10)
+  const [updating, setUpdating] = useState(false)
+  const snapshotInFlight = useRef(false)
+  const eventsInFlight = useRef(false)
+  const failures = useRef(0)
+  const lastSuccess = useRef<number | null>(null)
 
-  const snapshot = snapshotResult.status === "fulfilled" ? snapshotResult.value : {}
-  const recent = recentResult.status === "fulfilled" ? recentResult.value : []
-  const full = fullResult.status === "fulfilled" ? fullResult.value : []
-  const unavailable = snapshotResult.status === "rejected"
+  const refreshSnapshot = useCallback(async () => {
+    if (snapshotInFlight.current) return
+    snapshotInFlight.current = true
+    setUpdating(true)
+    try {
+      const next = await browserRequest<DashboardSnapshot>("/api/dashboard", 12_000)
+      setSnapshot(next)
+      failures.current = 0
+      lastSuccess.current = Date.now()
+      setConnection("live")
+    } catch (error) {
+      failures.current += 1
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        setConnection("timeout")
+      } else if (!lastSuccess.current || failures.current >= 3) {
+        setConnection("offline")
+      } else {
+        setConnection("stale")
+      }
+    } finally {
+      snapshotInFlight.current = false
+      setUpdating(false)
+      setSeconds(10)
+    }
+  }, [])
+
+  const refreshEvents = useCallback(async () => {
+    if (eventsInFlight.current) return
+    eventsInFlight.current = true
+    try {
+      const rows = await browserRequest<JournalRecord[]>("/api/events", 12_000)
+      setRecent(rows)
+    } catch {
+      // Event history is secondary. Keep the last successful rows visible.
+    } finally {
+      eventsInFlight.current = false
+    }
+  }, [])
+
+  const refreshAll = useCallback(() => {
+    void refreshSnapshot()
+    void refreshEvents()
+  }, [refreshEvents, refreshSnapshot])
+
+  useEffect(() => {
+    const initialTimer = window.setTimeout(refreshAll, 0)
+    const snapshotTimer = window.setInterval(refreshSnapshot, 10_000)
+    const eventTimer = window.setInterval(refreshEvents, 30_000)
+    const countdownTimer = window.setInterval(() => setSeconds(value => value <= 1 ? 10 : value - 1), 1_000)
+    const staleTimer = window.setInterval(() => {
+      if (lastSuccess.current && Date.now() - lastSuccess.current > 25_000) {
+        setConnection(current => current === "live" ? "stale" : current)
+      }
+    }, 2_000)
+    return () => {
+      window.clearTimeout(initialTimer)
+      window.clearInterval(snapshotTimer)
+      window.clearInterval(eventTimer)
+      window.clearInterval(countdownTimer)
+      window.clearInterval(staleTimer)
+    }
+  }, [refreshAll, refreshEvents, refreshSnapshot])
+
+  const unavailable = !snapshot.market && (connection === "offline" || connection === "timeout")
   const market = snapshot.market
   const score = snapshot.score
   const decision = snapshot.decision
@@ -80,9 +161,6 @@ export default async function Home() {
   const positions = market?.positions ?? []
   const floating = market ? market.equity - market.balance : undefined
   const mid = market ? (market.bid + market.ask) / 2 : undefined
-  const tradeRows = full.filter((row: JournalRecord) =>
-    row.event === "TRADE_EXECUTED" || row.event === "TRADE_CLOSED",
-  ).reverse()
   const recentRows = recent.slice(-100).reverse()
   const aiStatus = decision?.status ?? (snapshot.ai_gate?.call ? "PROCESSING" : "NOT CALLED")
   const executionStatus = execution?.signal_created ? execution.order_type : execution?.reason ?? "NO SIGNAL"
@@ -104,14 +182,19 @@ export default async function Home() {
           </div>
         </div>
         <div className="topbar-status">
-          <span className={`connection ${unavailable ? "is-offline" : ""}`}>
-            <i aria-hidden="true" />{unavailable ? "API OFFLINE" : "LIVE"}
+          <span className={`connection is-${connection}`} title={connection === "stale" || connection === "timeout" ? "Data terakhir tetap ditampilkan" : undefined}>
+            <i aria-hidden="true" />{connection === "loading" ? "CONNECTING" : connection.toUpperCase()}
           </span>
-          <LiveRefresh key={snapshot.updated_at} />
+          <button className="refresh-button" type="button" onClick={refreshAll} disabled={updating}>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6.1 9A7 7 0 0 1 18 6.5L20 9M4 15l2 2.5A7 7 0 0 0 17.9 15" /></svg>
+            {updating ? "Updating" : `Refresh ${seconds}s`}
+          </button>
         </div>
       </header>
 
-      {unavailable && <div role="alert" className="alert">Data API tidak tersedia. Periksa konfigurasi RIRI API pada deployment dashboard.</div>}
+      {unavailable && <div role="alert" className="alert">API belum dapat dijangkau. Dashboard akan mencoba kembali otomatis tanpa menghapus data terakhir.</div>}
+      {!unavailable && connection === "timeout" && <div role="status" className="alert alert-warn">Respons API terlambat. Data terakhir tetap ditampilkan dan koneksi akan dicoba kembali.</div>}
+      {!unavailable && connection === "stale" && <div role="status" className="alert alert-warn">Data belum diperbarui. Menampilkan snapshot terakhir yang berhasil diterima.</div>}
 
       <section className="market-hero" aria-label="Current XAUUSD market">
         <div className="market-identity">
@@ -217,7 +300,7 @@ export default async function Home() {
           <div><span className="kicker">AUDIT TRAIL</span><h2>RIRI journal</h2></div>
           <p>Waktu ditampilkan dalam WIB · data diperbarui otomatis setiap 10 detik</p>
         </div>
-        <JournalTable recentRows={recentRows} tradeRows={tradeRows} tradeHistoryAvailable={fullResult.status === "fulfilled"} />
+        <JournalTable recentRows={recentRows} />
       </section>
 
       <footer><span>RIRI · XAUUSD autonomous execution</span><span>Last API update {time(snapshot.updated_at)}</span></footer>

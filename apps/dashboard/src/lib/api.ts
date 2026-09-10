@@ -3,25 +3,44 @@ import type { DashboardSnapshot, JournalRecord } from "@/types/dashboard"
 const API_URL = (process.env.RIRI_API_URL || "").replace(/\/$/, "")
 const DASHBOARD_TOKEN = process.env.RIRI_DASHBOARD_API_KEY || ""
 
-async function request<T>(endpoint: string): Promise<T> {
+export class RiriApiError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: "configuration" | "timeout" | "upstream",
+    public readonly status = 502,
+  ) {
+    super(message)
+    this.name = "RiriApiError"
+  }
+}
+
+async function request<T>(endpoint: string, timeoutMs = 10_000): Promise<T> {
   if (!API_URL) {
-    throw new Error("RIRI_API_URL is not configured")
+    throw new RiriApiError("RIRI_API_URL is not configured", "configuration", 500)
   }
   if (!DASHBOARD_TOKEN) {
-    throw new Error("RIRI_DASHBOARD_API_KEY is not configured")
+    throw new RiriApiError("RIRI_DASHBOARD_API_KEY is not configured", "configuration", 500)
   }
 
-  const response = await fetch(
-    `${API_URL}${endpoint}`,
-    {
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${DASHBOARD_TOKEN}` },
-      signal: AbortSignal.timeout(5_000),
-    },
-  )
+  let response: Response
+  try {
+    response = await fetch(
+      `${API_URL}${endpoint}`,
+      {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${DASHBOARD_TOKEN}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    )
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new RiriApiError("RIRI API request timed out", "timeout", 504)
+    }
+    throw new RiriApiError("RIRI API connection failed", "upstream")
+  }
 
   if (!response.ok) {
-    throw new Error(`RIRI API returned ${response.status}`)
+    throw new RiriApiError(`RIRI API returned ${response.status}`, "upstream")
   }
   return response.json() as Promise<T>
 }
@@ -35,5 +54,5 @@ export function getJournalHistory() {
 }
 
 export function getFullJournalHistory() {
-  return request<JournalRecord[]>("/journal")
+  return request<JournalRecord[]>("/journal", 15_000)
 }
