@@ -1,0 +1,35 @@
+services:
+  brain:
+    build: ./apps/brain
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+      RIRI_MT5_API_KEY: ${RIRI_MT5_API_KEY:?RIRI_MT5_API_KEY is required}
+      RIRI_DASHBOARD_API_KEY: ${RIRI_DASHBOARD_API_KEY:?RIRI_DASHBOARD_API_KEY is required}
+      RIRI_STATE_DIR: /app/data
+      ENVIRONMENT: production
+    ports:
+      - "8000:8000"
+    volumes:
+      - riri_state:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  dashboard:
+    build: ./apps/dashboard
+    restart: unless-stopped
+    depends_on:
+      brain:
+        condition: service_healthy
+    environment:
+      RIRI_API_URL: http://brain:8000
+      RIRI_DASHBOARD_API_KEY: ${RIRI_DASHBOARD_API_KEY:?RIRI_DASHBOARD_API_KEY is required}
+    ports:
+      - "3000:3000"
+
+volumes:
+  riri_state:

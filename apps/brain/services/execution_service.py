@@ -1,312 +1,110 @@
 import math
 import uuid
+from datetime import datetime, timedelta, timezone
 
+from config.settings import settings
 from config.trading_config import (
-    TP_POINTS,
-    SL_POINTS,
-    DEFAULT_LOT,
-    MAX_TOTAL_LOT
+    DEFAULT_LOT, EQUITY_STEP, LOT_STEP, MAX_ACTIVE_TRADES, MAX_TOTAL_LOT,
+    MAX_SPREAD, MIN_ATR, MIN_CONFIDENCE, MIN_ENTRY_INTERVAL_SECONDS,
+    REDUCED_CONFIDENCE_LOT, STANDARD_CONFIDENCE,
+    SL_POINTS, TP_POINTS,
 )
-
 from models.execution import ExecutionResult
 from models.execution_signal import ExecutionSignal
-
 from services.signal_store import signal_store
 
 
-# ==================================================
-# LOT MANAGEMENT
-# ==================================================
-
-EQUITY_STEP = 500.0
-LOT_STEP = 0.01
-
-
 class ExecutionService:
+    """Creates a signal only after independently rechecking every hard rule."""
 
-    async def execute(
-        self,
-        decision,
-        risk,
-        market
-    ):
+    async def execute(self, decision, risk, market) -> ExecutionResult:
+        rejected = self._preflight_reason(decision, risk, market)
+        if rejected:
+            return self._result(rejected)
 
-        # ==================================================
-        # NO DECISION
-        # ==================================================
+        if signal_store.get_signal(market.identity_key) is not None:
+            return self._result("SIGNAL_PENDING")
 
-        if decision is None:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="NO_DECISION"
-            )
-
-        # ==================================================
-        # NO SIGNAL
-        # ==================================================
-
-        if decision.decision == "NONE":
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="NO_SIGNAL"
-            )
-
-        # ==================================================
-        # NO RISK
-        # ==================================================
-
-        if risk is None:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="NO_RISK"
-            )
-
-        # ==================================================
-        # RISK REJECTED
-        # ==================================================
-
-        if not risk.approved:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="RISK_REJECTED"
-            )
-
-        # ==================================================
-        # EXISTING PENDING SIGNAL
-        # ==================================================
-
-        existing_signal = (
-            signal_store.get_signal()
-        )
-
-        if existing_signal is not None:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="SIGNAL_PENDING"
-            )
-
-        # ==================================================
-        # MAX ACTIVE TRADES
-        #
-        # This is also enforced here as a second layer
-        # of protection.
-        # ==================================================
-
-        active_positions = [
-            position
-            for position in market.positions
-            if position.symbol == market.symbol
-        ]
-
-        active_trade_count = len(
-            active_positions
-        )
-
-        if active_trade_count >= 3:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="MAX_ACTIVE_TRADES"
-            )
-
-        # ==================================================
-        # EQUITY BASED LOT MANAGEMENT
-        #
-        # < $500
-        #     -> 0.01
-        #
-        # $500
-        #     -> 0.02
-        #
-        # $1,000
-        #     -> 0.03
-        #
-        # $1,500
-        #     -> 0.04
-        #
-        # Every additional $500 equity
-        #     -> +0.01 lot
-        #
-        # Maximum total lot = 0.50
-        # ==================================================
-
-        equity = float(
-            market.equity
-        )
-
-        if equity < 0:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="INVALID_EQUITY"
-            )
-
-        equity_steps = math.floor(
-            equity / EQUITY_STEP
-        )
-
-        lot = (
-            DEFAULT_LOT +
-            (
-                equity_steps *
-                LOT_STEP
-            )
-        )
-
-        # ==================================================
-        # NORMALIZE LOT
-        # ==================================================
-
-        lot = round(
-            lot,
-            2
-        )
-
-        # ==================================================
-        # MAX LOT CAP
-        # ==================================================
-
-        lot = min(
-            lot,
-            MAX_TOTAL_LOT
-        )
-
-        # ==================================================
-        # EXISTING ACTIVE LOT
-        # ==================================================
-
-        active_lot = sum(
-            float(position.lot)
-            for position in active_positions
-        )
-
-        active_lot = round(
-            active_lot,
-            2
-        )
-
-        # ==================================================
-        # REMAINING TOTAL EXPOSURE
-        # ==================================================
-
-        remaining_lot = (
-            MAX_TOTAL_LOT -
-            active_lot
-        )
-
-        remaining_lot = round(
-            remaining_lot,
-            2
-        )
-
-        # ==================================================
-        # MAX TOTAL LOT REACHED
-        # ==================================================
-
-        if remaining_lot <= 0:
-
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="MAX_TOTAL_LOT"
-            )
-
-        # ==================================================
-        # FIT LOT INTO REMAINING EXPOSURE
-        # ==================================================
-
-        if lot > remaining_lot:
-
-            lot = remaining_lot
-
-        lot = round(
-            lot,
-            2
-        )
-
-        # ==================================================
-        # INVALID LOT
-        # ==================================================
-
+        positions = [position for position in market.positions if position.symbol == market.symbol]
+        active_lot = sum(float(position.lot) for position in positions)
+        # A 60-69 probability is an executable but reduced-risk setup. It
+        # never receives the normal equity-based size. 70+ retains the locked
+        # sizing formula unchanged.
+        if decision.confidence < STANDARD_CONFIDENCE:
+            lot = REDUCED_CONFIDENCE_LOT
+        else:
+            lot = round(DEFAULT_LOT + math.floor(market.equity / EQUITY_STEP) * LOT_STEP, 2)
+        remaining_lot = max(0.0, MAX_TOTAL_LOT - active_lot)
+        remaining_lot = math.floor((remaining_lot + 1e-9) * 100) / 100
+        lot = min(lot, remaining_lot, MAX_TOTAL_LOT)
         if lot <= 0:
+            return self._result("INVALID_OR_EXHAUSTED_LOT")
 
-            return ExecutionResult(
-                executed=False,
-                order_type="NONE",
-                lot=0.0,
-                reason="INVALID_LOT"
-            )
-
-        # ==================================================
-        # CREATE EXECUTION SIGNAL
-        # ==================================================
-
+        now = datetime.now(timezone.utc)
         signal = ExecutionSignal(
-
-            signal_id=str(
-                uuid.uuid4()
-            ),
-
+            signal_id=str(uuid.uuid4()),
             symbol=market.symbol,
-
             action=decision.decision,
-
             lot=lot,
-
             tp_points=TP_POINTS,
-
             sl_points=SL_POINTS,
-
-            confidence=max(
-                0,
-                min(
-                    100,
-                    decision.confidence
-                )
-            ),
-
-            status="PENDING"
+            confidence=decision.confidence,
+            account_id=market.account_id,
+            terminal_id=market.terminal_id,
+            instance_id=market.instance_id,
+            market_time=market.market_time,
+            created_at=now,
+            expires_at=now + timedelta(seconds=settings.SIGNAL_EXPIRY_SECONDS),
+            created_at_epoch=int(now.timestamp()),
+            expires_at_epoch=int(now.timestamp()) + settings.SIGNAL_EXPIRY_SECONDS,
         )
-
-        # ==================================================
-        # STORE SIGNAL
-        # ==================================================
-
-        signal_store.set_signal(
-            signal
-        )
-
-        # ==================================================
-        # RESULT
-        # ==================================================
-
+        signal_store.set_signal(market.identity_key, signal)
         return ExecutionResult(
-
-            executed=True,
-
+            signal_created=True,
             order_type=decision.decision,
-
             lot=lot,
-
-            reason="SIGNAL_CREATED"
+            reason="SIGNAL_CREATED",
+            signal_id=signal.signal_id,
         )
+
+    @staticmethod
+    def _preflight_reason(decision, risk, market) -> str | None:
+        if decision is None:
+            return "NO_DECISION"
+        if decision.decision not in {"BUY", "SELL"}:
+            return "NO_SIGNAL"
+        if decision.confidence < MIN_CONFIDENCE:
+            return "CONFIDENCE_BELOW_60"
+        if risk is None or not risk.approved:
+            return "RISK_REJECTED"
+        if market.symbol != "XAUUSD":
+            return "SYMBOL_NOT_ALLOWED"
+        now = int(datetime.now(timezone.utc).timestamp())
+        age = now - int(market.market_time)
+        if age < 0 or age > settings.MAX_MARKET_AGE_SECONDS:
+            return "STALE_MARKET_DATA"
+        if market.free_margin <= 0:
+            return "INSUFFICIENT_FREE_MARGIN"
+        if market.spread > MAX_SPREAD:
+            return "SPREAD_ABOVE_LIMIT"
+        if market.atr < MIN_ATR:
+            return "ATR_BELOW_LIMIT"
+
+        positions = [position for position in market.positions if position.symbol == market.symbol]
+        if len(positions) >= MAX_ACTIVE_TRADES:
+            return "MAX_ACTIVE_TRADES"
+        if sum(float(position.lot) for position in positions) >= MAX_TOTAL_LOT:
+            return "MAX_TOTAL_LOT"
+        opposite = "SELL" if decision.decision == "BUY" else "BUY"
+        if any(position.type == opposite for position in positions):
+            return "HEDGING_FORBIDDEN"
+        if any(position.type == decision.decision and position.profit < 0 for position in positions):
+            return "AVERAGING_FORBIDDEN"
+        open_times = [int(position.open_time) for position in positions if position.open_time > 0]
+        if open_times and now - max(open_times) < MIN_ENTRY_INTERVAL_SECONDS:
+            return "MIN_ENTRY_INTERVAL"
+        return None
+
+    @staticmethod
+    def _result(reason: str) -> ExecutionResult:
+        return ExecutionResult(signal_created=False, order_type="NONE", lot=0.0, reason=reason)

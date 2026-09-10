@@ -11,6 +11,13 @@ SYMBOL = "XAUUSD"
 
 MIN_SCORE = 70
 
+# A directional decision must be more likely than not to reach TP before SL.
+# 60-69 is permitted only with the reduced fixed lot below. 70+ keeps the
+# normal equity-based sizing formula.
+MIN_CONFIDENCE = 60
+STANDARD_CONFIDENCE = 70
+REDUCED_CONFIDENCE_LOT = 0.01
+
 
 # ==================================================
 # TRADE PROTECTION
@@ -64,19 +71,5 @@ MAX_SPREAD = 30.0
 MIN_ATR = 1.0
 
 
-# ==================================================
-# RISK
-# ==================================================
-
-MIN_RISK_SCORE = 70
-
-
-# ==================================================
-# TRADING RULES
-# ==================================================
-
-ALLOW_HEDGING = False
-
-ALLOW_MARTINGALE = False
-
-ALLOW_AVERAGING = False
+# Hedging, martingale, and averaging are not feature flags in v1.
+# They are unconditional rejection rules in risk and MT5 preflight.

@@ -1,11 +1,10 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI
 
 from api.routes import router
 from config.settings import settings
 from utils.logger import logger
-from websocket.websocket_server import manager
 
 
 @asynccontextmanager
@@ -25,21 +24,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None if settings.ENVIRONMENT == "production" else "/docs",
+    redoc_url=None,
+    openapi_url=None if settings.ENVIRONMENT == "production" else "/openapi.json",
 )
 
 app.include_router(router)
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(
-    websocket: WebSocket
-):
-    await manager.connect(websocket)
-
-    try:
-        while True:
-            await websocket.receive_text()
-
-    except Exception:
-        manager.disconnect(websocket)

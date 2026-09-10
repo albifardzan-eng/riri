@@ -1,23 +1,59 @@
 import json
+import time
 
-from openai import AsyncOpenAI
+from openai import (
+    AsyncOpenAI, APIConnectionError, APITimeoutError,
+    AuthenticationError, PermissionDeniedError, RateLimitError,
+)
 
-from config.ai_config import MODEL_NAME
 from config.settings import settings
 from config.trading_config import (
+    MIN_CONFIDENCE,
+    STANDARD_CONFIDENCE,
     TP_POINTS,
     SL_POINTS
 )
 
 from models.trader_decision import TraderDecision
+from utils.logger import logger
+
+
+DECISION_TEXT_CONFIG = {
+    "format": {
+        "type": "json_schema",
+        "name": "riri_trade_decision",
+        "description": "RIRI's final XAUUSD trade direction and confidence.",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": ["BUY", "SELL", "NONE"],
+                },
+                "confidence": {
+                    "type": "integer",
+                },
+            },
+            "required": ["decision", "confidence"],
+            "additionalProperties": False,
+        },
+    }
+}
 
 
 class AITrader:
 
     def __init__(self):
 
-        self.client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY
+        self.client = (
+            AsyncOpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                timeout=settings.OPENAI_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
+            if settings.OPENAI_API_KEY
+            else None
         )
 
     def _serialize_data(
@@ -46,8 +82,39 @@ class AITrader:
         market,
         statistics,
         fundamental,
-        pattern
+        pattern,
+        allowed_actions=("BUY", "SELL"),
     ) -> TraderDecision:
+
+        started = time.monotonic()
+        response = None
+
+        def finish(status, reason, decision="NONE", confidence=0):
+            usage = getattr(response, "usage", None)
+            details = getattr(usage, "output_tokens_details", None)
+
+            def tokens(source, name):
+                value = getattr(source, name, None)
+                return value if type(value) is int and value >= 0 else None
+
+            result = TraderDecision(
+                decision=decision, confidence=confidence, status=status,
+                reason=reason, latency_ms=int((time.monotonic() - started) * 1000),
+                input_tokens=tokens(usage, "input_tokens"),
+                output_tokens=tokens(usage, "output_tokens"),
+                reasoning_tokens=tokens(details, "reasoning_tokens"),
+            )
+            # No response text, exception body, credentials or account context.
+            log = logger.warning if status in {"ERROR", "UNAVAILABLE"} else logger.info
+            log(
+                f"AITrader Decision={result.decision} Confidence={result.confidence} "
+                f"Status={status} Reason={reason} LatencyMs={result.latency_ms} "
+                f"OutputTokens={result.output_tokens} ReasoningTokens={result.reasoning_tokens}"
+            )
+            return result
+
+        if self.client is None:
+            return finish("UNAVAILABLE", "AI_NOT_CONFIGURED")
 
         market_json = (
             self._serialize_data(
@@ -72,6 +139,10 @@ class AITrader:
                 pattern
             )
         )
+        allowed_actions = tuple(action for action in allowed_actions if action in {"BUY", "SELL"})
+        if not allowed_actions:
+            raise ValueError("AITrader requires at least one executable action")
+        executable_actions = ", ".join(allowed_actions)
 
         prompt = f"""
 You are RIRI, an institutional XAUUSD short-term trading AI.
@@ -117,6 +188,17 @@ LIVE PATTERN DATA
 {pattern_json}
 
 ==================================================
+EXECUTABLE DIRECTIONS
+==================================================
+
+The deterministic risk rules permit new entries only for:
+
+{executable_actions}
+
+Do not choose any other direction. Choose NONE when the
+permitted direction has no sufficiently strong edge.
+
+==================================================
 CORE ANALYSIS
 ==================================================
 
@@ -138,8 +220,8 @@ Consider:
 - rejection
 - breakout / failed breakout
 - exhaustion
-- continuation probability
-- reversal probability
+- continuation evidence
+- reversal evidence
 - target feasibility
 
 Do not assume that a strong move must continue.
@@ -292,12 +374,27 @@ The objective is quality, not trade frequency.
 CONFIDENCE
 ==================================================
 
-Confidence = quality of the specific setup.
+Confidence is NOT a generic setup-quality score.
 
-Use the full 0-100 range.
+For BUY or SELL, confidence is your conservative, calibrated
+estimate (0-100) that the fixed {TP_POINTS}-point TP will be
+reached BEFORE the fixed {SL_POINTS}-point SL, from the current
+price and while this signal remains valid.
 
-Higher confidence requires stronger evidence and clearer
-target feasibility.
+50 means no directional edge. Do not return BUY or SELL at 50 or
+below. Use NONE instead.
+
+60-69 means a modest but positive edge. It may be traded only at
+the system's reduced fixed lot; do not inflate the number merely
+to obtain normal sizing.
+
+70 or higher requires clear, mutually reinforcing evidence and a
+realistic path to the target. It is eligible for normal sizing,
+subject to deterministic risk rules.
+
+Calibrate conservatively. Reduce confidence for weak confirmation,
+poor target room, unstable post-news behaviour, or conflicting
+technical and fundamental evidence.
 
 If decision = NONE, confidence MUST be 0.
 
@@ -327,114 +424,120 @@ Only JSON.
         try:
 
             response = await self.client.responses.create(
-                model=MODEL_NAME,
-                input=prompt
+                model=settings.OPENAI_MODEL,
+                input=prompt,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS,
+                text=DECISION_TEXT_CONFIG,
+                store=False,
             )
 
-            content = (
-                response.output_text
-                .strip()
+            response_status = getattr(
+                response,
+                "status",
+                None,
             )
 
-            start = content.find(
-                "{"
-            )
-
-            end = content.rfind(
-                "}"
-            )
-
-            if (
-                start == -1
-                or
-                end == -1
-                or
-                end < start
-            ):
-
-                raise ValueError(
-                    "AI Trader returned invalid JSON"
+            if response_status != "completed":
+                incomplete_details = getattr(
+                    response,
+                    "incomplete_details",
+                    None,
                 )
+                incomplete_reason = getattr(
+                    incomplete_details,
+                    "reason",
+                    "unknown",
+                )
+                reason = (
+                    "AI_MAX_OUTPUT_TOKENS"
+                    if response_status == "incomplete" and incomplete_reason == "max_output_tokens"
+                    else "AI_RESPONSE_NOT_COMPLETED"
+                )
+                return finish("ERROR", reason)
 
-            content = content[
-                start:end + 1
-            ]
+            if any(
+                getattr(part, "type", None) == "refusal"
+                for item in (getattr(response, "output", None) or [])
+                for part in (getattr(item, "content", None) or [])
+            ):
+                return finish("ERROR", "AI_REFUSAL")
+
+            content = str(
+                getattr(
+                    response,
+                    "output_text",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not content:
+                return finish("ERROR", "AI_EMPTY_OUTPUT")
 
             data = json.loads(
                 content
             )
 
-            decision = str(
-                data.get(
-                    "decision",
+            if (
+                not isinstance(data, dict)
+                or set(data) != {"decision", "confidence"}
+            ):
+                raise ValueError(
+                    "AI Trader response has unexpected fields"
+                )
+
+            decision = data["decision"]
+            confidence = data["confidence"]
+
+            if (
+                not isinstance(decision, str)
+                or decision not in (
+                    "BUY",
+                    "SELL",
                     "NONE"
                 )
-            ).upper().strip()
-
-            raw_confidence = (
-                data.get(
-                    "confidence",
-                    0
-                )
-            )
-
-            try:
-
-                confidence = int(
-                    float(
-                        raw_confidence
-                    )
-                )
-
-            except (
-                TypeError,
-                ValueError
             ):
-
-                confidence = 0
-
-            if decision not in (
-                "BUY",
-                "SELL",
-                "NONE"
-            ):
-
-                decision = "NONE"
-
-            confidence = max(
-                0,
-                min(
-                    100,
-                    confidence
+                raise ValueError(
+                    "AI Trader response has invalid decision"
                 )
-            )
+
+            if (
+                not isinstance(confidence, int)
+                or isinstance(confidence, bool)
+                or not 0 <= confidence <= 100
+            ):
+                raise ValueError(
+                    "AI Trader response has invalid confidence"
+                )
 
             if decision == "NONE":
-
-                confidence = 0
-
-            result = TraderDecision(
-                decision=decision,
-                confidence=confidence
+                return finish("COMPLETED", "AI_NO_TRADE")
+            if confidence < MIN_CONFIDENCE:
+                return finish("FILTERED", "CONFIDENCE_BELOW_60")
+            reason = (
+                "AI_DIRECTION_SELECTED_REDUCED_RISK"
+                if confidence < STANDARD_CONFIDENCE
+                else "AI_DIRECTION_SELECTED"
             )
+            return finish("COMPLETED", reason, decision, confidence)
 
-            print(
-                f"AITrader Decision="
-                f"{result.decision} "
-                f"Confidence="
-                f"{result.confidence}"
-            )
-
-            return result
-
-        except Exception as e:
-
-            print(
-                "AITrader Error:",
-                e
-            )
-
-            return TraderDecision(
-                decision="NONE",
-                confidence=0
-            )
+        except (
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
+            return finish("ERROR", "AI_INVALID_OUTPUT")
+        except APITimeoutError:
+            return finish("ERROR", "AI_TIMEOUT")
+        except APIConnectionError:
+            return finish("ERROR", "AI_CONNECTION_ERROR")
+        except (AuthenticationError, PermissionDeniedError):
+            return finish("ERROR", "AI_ACCESS_DENIED")
+        except RateLimitError as exc:
+            body = exc.body if isinstance(exc.body, dict) else {}
+            error = body.get("error", body)
+            error = error if isinstance(error, dict) else {}
+            quota = error.get("code") in {"insufficient_quota", "credit_balance_exhausted"} or error.get("type") == "insufficient_quota"
+            return finish("ERROR", "AI_QUOTA_EXHAUSTED" if quota else "AI_RATE_LIMITED")
+        except Exception:
+            return finish("ERROR", "AI_API_ERROR")
