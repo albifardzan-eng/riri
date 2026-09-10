@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RIRI Trading Dashboard",
-  description: "Operational state and trade lifecycle for RIRI v1",
+  title: "RIRI · XAUUSD Trading Intelligence",
+  description: "Live market intelligence, execution state, and permanent trade history for RIRI.",
 };
 
 export default function RootLayout({
@@ -16,7 +16,7 @@ export default function RootLayout({
       lang="id"
       className="h-full"
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body>{children}</body>
     </html>
   );
 }

@@ -33,3 +33,7 @@ export function getDashboardSnapshot() {
 export function getJournalHistory() {
   return request<JournalRecord[]>("/journal/history")
 }
+
+export function getFullJournalHistory() {
+  return request<JournalRecord[]>("/journal")
+}
