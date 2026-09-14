@@ -84,12 +84,15 @@ not an OpenAI request. Before calling AI, the backend deterministically checks
 the score and whether either direction could create a new order. It skips AI
 for score below 70, pending signals, entry cooldown, exhausted position/lot
 limits, invalid margin/spread/ATR/staleness, and when both directions are
-forbidden by the no-hedging/no-averaging rules.
+blocked by the conditional hedging/averaging rules (v1.3: both score and
+confidence must exceed 80). Eligibility checks score before calling AI; risk,
+execution and MT5 verify confidence after the response.
 
 Normal qualified calls are identity-scoped and limited by
 `AI_MIN_CALL_INTERVAL_SECONDS` (default 60, durable across restart). A material
-USD high-impact-news change may call AI early only after every deterministic
-entry gate passes. Material means event identity, phase, or actual/forecast/
+USD high-impact-news or material opportunity change may call AI early only
+after every deterministic entry gate passes and the event interval elapses
+(default 30 seconds). Material news means event identity, phase, or actual/forecast/
 previous changed; countdown minutes alone do not trigger another call. The AI
 receives only currently executable directions but execution repeats all rules;
 there is no reuse of a prior AI decision or signal.
@@ -116,7 +119,45 @@ Common reasons: `AI_NO_TRADE`, `AI_DIRECTION_SELECTED`,
 Optional `latency_ms`, `input_tokens`, `output_tokens`, and `reasoning_tokens`
 support diagnosis without exposing prompts or hidden reasoning. Output tokens
 already include reasoning tokens; do not add the two to calculate output usage.
-MT5 signal/ACK contracts and all other hard trading thresholds are unchanged.
+The v1.3 signal contract additionally requires initial score, policy version,
+and RIRI magic number; see the versioned contract below. ACK fields are unchanged.
+
+## v1.3 entry-policy contract (version 2)
+
+New market fields: `server_time` (same clock as position `open_time`),
+`executor_policy_version=2`, `trade_allowed` (terminal, EA and account permissions),
+and `hedging_account`. `market_time` remains UTC for transport freshness.
+Never compare position `open_time` directly to UTC. Defaults for legacy payloads
+are fail-closed: data can be stored, but AI and entry are blocked until upgrade.
+Strict legacy backends reject v1.3's extra fields; upgrade backend before EA.
+
+Positions remain visible in the snapshot, but cooldown, direction policy, count
+and gross-lot limits use only magic `20260701`. The cap is not an account-wide
+portfolio cap. Free margin and broker order checks still use the whole account.
+Netting accounts cannot provide reliable EA isolation and are rejected.
+
+Signals carry `initial_score`, `entry_policy_version=2` and `magic_number`.
+The executor rejects missing/mismatched versions before sending any order.
+The new signal score is calculated by the backend, not supplied by the model.
+
+`ai_gate` includes `required_confidence` per direction and `diagnostics` with
+all common/directional blockers, RIRI/foreign position counts, gross lots,
+profit, most recent broker entry time, its age, and remaining cooldown.
+Invalid times produce `POSITION_TIME_INVALID`, not an indefinite timer.
+Flat MT5 telemetry exposes the same cooldown, per-direction blockers/minimum
+confidence and AI retry interval. Unknown ages/countdowns are null (MT5: -1).
+
+`AI_SKIPPED_ENTRY_COOLDOWN` identifies a timer block; `AI_SKIPPED_TRADING_NOT_ALLOWED`,
+`AI_SKIPPED_POSITION_POLICY_BLOCKED` and other specific reasons replace the old
+umbrella label. For mixed blockers inspect both `buy_blockers` and `sell_blockers`.
+
+The 60-second normal AI interval remains. A new closed candle, newly feasible
+direction/lower directional confidence requirement, or a mid-price movement
+of at least `AI_PRICE_CHANGE_ATR` (default 0.25) times the ATR at the last AI call
+can trigger `AI_CALLED_OPPORTUNITY_CHANGED` after the event minimum (30 seconds).
+Identical snapshots and tiny ticks do not bypass throttling. Skipped calls do
+not reset the clock; only actual call reservations do. All state is durable and
+the schema migration is additive. No prior decision is reused as a new signal.
 
 ## `POST /execution/trade-event`
 

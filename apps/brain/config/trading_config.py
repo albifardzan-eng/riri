@@ -64,12 +64,17 @@ LOT_STEP = 0.01
 # EXECUTION SAFETY
 # ==================================================
 
-MIN_ENTRY_INTERVAL_SECONDS = 30 * 60
+MIN_ENTRY_INTERVAL_SECONDS = 15 * 60
+
+# Both score and confidence must be strictly greater than this threshold.
+EXCEPTION_THRESHOLD = 80
+RIRI_MAGIC_NUMBER = 20260701
+ENTRY_POLICY_VERSION = 2
 
 MAX_SPREAD = 30.0
 
 MIN_ATR = 1.0
 
 
-# Hedging, martingale, and averaging are not feature flags in v1.
-# They are unconditional rejection rules in risk and MT5 preflight.
+# No loss-based lot multipliers (martingale). Exceptional entries retain the
+# normal equity sizing, fixed TP/SL, cooldown, and gross RIRI exposure caps.

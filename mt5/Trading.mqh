@@ -2,6 +2,13 @@
 #define __RIRI_TRADING_MQH__
 
 
+bool RIRI_SelectedPosition()
+{
+   return PositionGetString(POSITION_SYMBOL) == _Symbol &&
+      PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER;
+}
+
+
 double NormalizeTradeLot(double lot)
 {
    double minimum = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
@@ -24,7 +31,7 @@ int RIRI_PositionCount(double &total_lot)
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || !PositionSelectByTicket(ticket))
          continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+      if(!RIRI_SelectedPosition())
          continue;
       count++;
       total_lot += PositionGetDouble(POSITION_VOLUME);
@@ -41,9 +48,11 @@ long RIRI_LatestPositionTime()
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || !PositionSelectByTicket(ticket))
          continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+      if(!RIRI_SelectedPosition())
          continue;
       long opened = PositionGetInteger(POSITION_TIME);
+      if(opened <= 0 || opened > (long)TimeCurrent())
+         return -1;
       if(opened > latest)
          latest = opened;
    }
@@ -51,26 +60,28 @@ long RIRI_LatestPositionTime()
 }
 
 
-bool RIRI_PositionPolicy(string action, string &reason)
+bool RIRI_PositionPolicy(const RiriSignal &signal, string &reason)
 {
    for(int i = 0; i < PositionsTotal(); i++)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || !PositionSelectByTicket(ticket))
          continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+      if(!RIRI_SelectedPosition())
          continue;
 
       long type = PositionGetInteger(POSITION_TYPE);
       string existing = type == POSITION_TYPE_BUY ? "BUY" : "SELL";
-      if(existing != action)
+      bool hedge = existing != signal.action;
+      bool average = existing == signal.action && PositionGetDouble(POSITION_PROFIT) < 0;
+      if((hedge || average) && signal.initial_score <= RIRI_EXCEPTION_THRESHOLD)
       {
-         reason = "HEDGING_FORBIDDEN";
+         reason = hedge ? "HEDGING_REQUIRES_SCORE_ABOVE_80" : "AVERAGING_REQUIRES_SCORE_ABOVE_80";
          return false;
       }
-      if(PositionGetDouble(POSITION_PROFIT) < 0)
+      if((hedge || average) && signal.confidence <= RIRI_EXCEPTION_THRESHOLD)
       {
-         reason = "AVERAGING_FORBIDDEN";
+         reason = "POSITION_EXCEPTION_REQUIRES_CONFIDENCE_ABOVE_80";
          return false;
       }
    }
@@ -80,6 +91,21 @@ bool RIRI_PositionPolicy(string action, string &reason)
 
 bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
 {
+   if(signal.entry_policy_version != RIRI_ENTRY_POLICY_VERSION || signal.magic_number != MAGIC_NUMBER)
+   {
+      reason = "ENTRY_POLICY_MISMATCH";
+      return false;
+   }
+   if(AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+   {
+      reason = "HEDGING_ACCOUNT_REQUIRED";
+      return false;
+   }
+   if(signal.initial_score < 70 || signal.initial_score > 100 || signal.confidence > 100)
+   {
+      reason = "INVALID_SCORE_OR_CONFIDENCE";
+      return false;
+   }
    if(_Symbol != RIRI_SYMBOL || signal.symbol != RIRI_SYMBOL || signal.symbol != _Symbol)
    {
       reason = "SYMBOL_NOT_ALLOWED";
@@ -125,7 +151,8 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
    }
    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ||
       !MQLInfoInteger(MQL_TRADE_ALLOWED) ||
-      !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+      !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) ||
+      !AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
    {
       reason = "TRADING_NOT_ALLOWED";
       return false;
@@ -139,12 +166,17 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
       return false;
    }
    long latest_open = RIRI_LatestPositionTime();
-   if(latest_open > 0 && (long)TimeCurrent() - latest_open < 30 * 60)
+   if(latest_open < 0)
+   {
+      reason = "POSITION_TIME_INVALID";
+      return false;
+   }
+   if(latest_open > 0 && (long)TimeCurrent() - latest_open < RIRI_MIN_ENTRY_INTERVAL_SECONDS)
    {
       reason = "MIN_ENTRY_INTERVAL";
       return false;
    }
-   if(!RIRI_PositionPolicy(signal.action, reason))
+   if(!RIRI_PositionPolicy(signal, reason))
       return false;
 
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -260,6 +292,7 @@ bool RIRI_SendOrder(const RiriSignal &signal, double lot)
    );
    Print("[EXECUTION] signal=", signal.signal_id,
       " action=", signal.action,
+      " score=", signal.initial_score,
       " confidence=", signal.confidence,
       " lot=", DoubleToString(lot, 2),
       " result=", filled ? "EXECUTED" : "REJECTED",
@@ -281,6 +314,7 @@ bool ExecuteSignal()
    {
       Print("[EXECUTION] rejected signal=", signal.signal_id,
          " action=", signal.action,
+         " score=", signal.initial_score,
          " confidence=", signal.confidence,
          " requested_lot=", DoubleToString(signal.lot, 2),
          " reason=", reason);

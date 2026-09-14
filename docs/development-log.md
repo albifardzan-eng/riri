@@ -1,5 +1,21 @@
 # Development log
 
+## 2026-09-14 — v1.3 entry policy (implementation, not production activation)
+
+- User-authorized exceptions: averaging and hedging require score >80 AND
+  confidence >80. Backend and MT5 enforce strict boundaries; no martingale.
+- Cooldown reduced to 15 minutes and calculated using a single broker clock,
+  fixing the UTC/POSITION_TIME mismatch in the old backend calculation.
+- Isolated cooldown, direction checks and 3-position/0.50-gross-lot limits to
+  RIRI magic 20260701. Whole-account margin checks retained; foreign positions
+  stay visible but are not a shared portfolio cap.
+- Added multi-blocker diagnostics, per-direction confidence requirements and
+  precise cooldown logs. Paused/legacy/netting executors skip AI and entry.
+- Added material-opportunity triggers with a 30-second event floor, retaining
+  the normal 60-second AI interval, durable reservations and valid NONE outcomes.
+- Coordinated backend/EA upgrade required. No production restart, order, or
+  live model call is part of this implementation. See entry-policy-v1.3.md.
+
 ## 2026-09-08 — 1.1.4 per-identity pipeline serialization
 
 - Serialized MT5 analysis by account/terminal/instance identity. A snapshot

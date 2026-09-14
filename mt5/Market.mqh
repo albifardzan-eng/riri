@@ -106,6 +106,16 @@ string BuildMarketJson()
    json += StringFormat("\"symbol\":\"%s\",", _Symbol);
    json += StringFormat("\"timeframe\":\"%s\",", RIRI_TimeframeName());
    json += StringFormat("\"market_time\":%I64d,", (long)TimeGMT());
+   // POSITION_TIME is a broker-clock value, not UTC. Send its clock alongside
+   // it so the backend computes an interval without a timezone mismatch.
+   json += StringFormat("\"server_time\":%I64d,", (long)TimeCurrent());
+   json += StringFormat("\"executor_policy_version\":%d,", RIRI_ENTRY_POLICY_VERSION);
+   bool trade_allowed = TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) &&
+      MQLInfoInteger(MQL_TRADE_ALLOWED) && AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) &&
+      AccountInfoInteger(ACCOUNT_TRADE_EXPERT);
+   json += "\"trade_allowed\":" + (trade_allowed ? "true," : "false,");
+   bool hedging_account = AccountInfoInteger(ACCOUNT_MARGIN_MODE) == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
+   json += "\"hedging_account\":" + (hedging_account ? "true," : "false,");
    json += StringFormat("\"account_id\":\"%I64d\",", account);
    json += StringFormat("\"terminal_id\":\"%s\",", terminal);
    json += StringFormat("\"instance_id\":\"%s\",", FundamentalJsonSafeString(RIRI_INSTANCE_ID));

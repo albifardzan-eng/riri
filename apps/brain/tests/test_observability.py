@@ -189,7 +189,7 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             result = await self.run_cycle()
         decide.assert_not_called()
         self.assertEqual(result["pipeline"]["reason"], "MIN_ENTRY_INTERVAL")
-        self.assertEqual(result["ai_gate"]["reason"], "AI_SKIPPED_NO_EXECUTABLE_DIRECTION")
+        self.assertEqual(result["ai_gate"]["reason"], "AI_SKIPPED_ENTRY_COOLDOWN")
 
     async def test_spread_still_blocks_a_valid_sell(self):
         self.market = fixtures.market(account_id="observability", ask=2310.31, spread=31)
@@ -200,6 +200,7 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["gate_reason"], "SPREAD_ABOVE_LIMIT")
 
     async def test_loss_position_with_no_legal_direction_skips_ai(self):
+        self.calculate.return_value = self.calculate.return_value.model_copy(update={"score": 80})
         position = {
             "ticket": 1, "symbol": "XAUUSD", "type": "BUY", "lot": 0.01,
             "profit": -1.0, "open_time": int(time.time()) - 3600, "open_price": 2300.0,
@@ -209,12 +210,13 @@ class CycleDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(routes.ai_trader, "decide", new=AsyncMock()) as decide:
             result = await self.run_cycle()
         decide.assert_not_called()
-        self.assertEqual(result["gate_reason"], "NO_EXECUTABLE_DIRECTION")
+        self.assertEqual(result["gate_reason"], "POSITION_POLICY_BLOCKED")
         self.assertEqual(result["ai_gate"]["action_reasons"], {
-            "BUY": "AVERAGING_FORBIDDEN", "SELL": "HEDGING_FORBIDDEN",
+            "BUY": "AVERAGING_REQUIRES_SCORE_ABOVE_80", "SELL": "HEDGING_REQUIRES_SCORE_ABOVE_80",
         })
 
     async def test_profitable_position_calls_ai_only_for_legal_direction(self):
+        self.calculate.return_value = self.calculate.return_value.model_copy(update={"score": 80})
         position = {
             "ticket": 1, "symbol": "XAUUSD", "type": "BUY", "lot": 0.01,
             "profit": 1.0, "open_time": int(time.time()) - 3600, "open_price": 2300.0,
@@ -325,9 +327,10 @@ class AICallGateTests(unittest.TestCase):
             self.assertEqual(gate.claim("a", upcoming, now=100).reason, "AI_CALLED_INITIAL_QUALIFIED")
             self.assertEqual(gate.claim("a", upcoming, now=110).reason, "AI_SKIPPED_RATE_LIMIT")
             released = {**upcoming, "phase": "RELEASED", "actual": 3.4}
-            self.assertEqual(gate.claim("a", released, now=111).reason, "AI_CALLED_NEWS_CHANGED")
+            self.assertEqual(gate.claim("a", released, now=111).reason, "AI_SKIPPED_RATE_LIMIT")
             self.assertEqual(gate.claim("a", released, now=112).reason, "AI_SKIPPED_RATE_LIMIT")
-            self.assertEqual(gate.claim("a", released, now=171).reason, "AI_CALLED_INTERVAL_ELAPSED")
+            self.assertEqual(gate.claim("a", released, now=130).reason, "AI_CALLED_NEWS_CHANGED")
+            self.assertEqual(gate.claim("a", released, now=190).reason, "AI_CALLED_INTERVAL_ELAPSED")
 
     def test_eligibility_does_not_decide_direction(self):
         position = {
@@ -335,6 +338,6 @@ class AICallGateTests(unittest.TestCase):
             "profit": 2.0, "open_time": int(time.time()) - 3600, "open_price": 2300.0,
             "sl": 2330.0, "tp": 2290.0, "magic_number": 20260701,
         }
-        result = eligible_actions(fixtures.market(positions=[position]))
+        result = eligible_actions(fixtures.market(positions=[position]), initial_score=80)
         self.assertEqual(result.allowed_actions, ("SELL",))
-        self.assertEqual(result.action_reasons, {"BUY": "HEDGING_FORBIDDEN"})
+        self.assertEqual(result.action_reasons, {"BUY": "HEDGING_REQUIRES_SCORE_ABOVE_80", "SELL": "PASS"})

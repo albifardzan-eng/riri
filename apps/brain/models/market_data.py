@@ -78,6 +78,11 @@ class MarketData(BaseModel):
     symbol: str
     timeframe: str
     market_time: int = Field(gt=0)
+    # Same broker clock as POSITION_TIME; legacy executors fail entry preflight.
+    server_time: int = Field(default=0, ge=0)
+    executor_policy_version: int = Field(default=0, ge=0)
+    trade_allowed: bool = False
+    hedging_account: bool = False
     account_id: str = Field(min_length=1, max_length=64)
     terminal_id: str = Field(min_length=1, max_length=128)
     instance_id: str = Field(min_length=1, max_length=128)
