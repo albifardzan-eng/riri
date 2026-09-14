@@ -134,14 +134,17 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         update(stage, value)
 
     decision = risk = execution = None
-    eligibility = eligible_actions(data)
+    eligibility = eligible_actions(data, initial_score=score.score)
     allowed_actions = eligibility.allowed_actions
     gate_reason = eligibility.reason
     ai_gate = {
         "call": False,
-        "reason": "AI_SKIPPED_NO_EXECUTABLE_DIRECTION",
+        "reason": "AI_SKIPPED_ENTRY_COOLDOWN" if gate_reason == "MIN_ENTRY_INTERVAL" else f"AI_SKIPPED_{gate_reason}",
         "allowed_actions": list(allowed_actions),
         "action_reasons": eligibility.action_reasons,
+        "required_confidence": eligibility.required_confidence,
+        "diagnostics": eligibility.diagnostics,
+        "retry_after_seconds": 0,
         "news_changed": False,
     }
     if not score.qualified:
@@ -151,11 +154,18 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         gate_reason = "SIGNAL_PENDING"
         ai_gate["reason"] = "AI_SKIPPED_SIGNAL_PENDING"
     elif allowed_actions:
-        gate_result = ai_call_gate.claim(key, fundamental)
+        gate_result = ai_call_gate.claim(key, fundamental, opportunity={
+            "candle_time": max(c.time for c in data.candles),
+            "mid": (data.bid + data.ask) / 2,
+            "atr": data.atr,
+            "point": data.point,
+            "required_confidence": {action: eligibility.required_confidence[action] for action in allowed_actions},
+        })
         ai_gate.update(
             call=gate_result.call,
             reason=gate_result.reason,
             news_changed=gate_result.news_changed,
+            retry_after_seconds=gate_result.retry_after_seconds,
         )
         if not gate_result.call:
             gate_reason = gate_result.reason
@@ -165,6 +175,8 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
     if score.qualified and allowed_actions and ai_gate["call"]:
         update("pipeline", {"stage": "AI"})
         market_context = data.model_dump()
+        market_context["entry_policy"] = eligibility.diagnostics
+        market_context["required_confidence"] = eligibility.required_confidence
         market_context["target"] = {
             "tp_points": TP_POINTS,
             "sl_points": SL_POINTS,
@@ -179,19 +191,26 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
             fundamental=fundamental,
             pattern=pattern,
             allowed_actions=allowed_actions,
+            required_confidence=eligibility.required_confidence,
         )
         update("decision", decision)
         update("pipeline", {"stage": "RISK"})
-        risk = await ai_risk.evaluate(market=data, trader_decision=decision)
+        risk = await ai_risk.evaluate(market=data, trader_decision=decision, initial_score=score.score)
         update("risk", risk)
         update("pipeline", {"stage": "EXECUTION"})
-        execution = await execution_service.execute(decision=decision, risk=risk, market=data)
+        execution = await execution_service.execute(decision=decision, risk=risk, market=data,
+                                                    initial_score=score.score)
         update("execution", execution)
     else:
         if score.qualified and not allowed_actions and gate_reason == "PASS":
             gate_reason = "NO_EXECUTABLE_DIRECTION"
         if score.qualified:
-            logger.info(f"AI Trader skipped for {key}: {ai_gate['reason']} ({gate_reason})")
+            logger.info(
+                f"AI Trader skipped for {key}: {ai_gate['reason']} ({gate_reason}) "
+                f"CooldownRemaining={eligibility.diagnostics['cooldown_remaining_seconds']} "
+                f"BUY={eligibility.action_reasons['BUY']} SELL={eligibility.action_reasons['SELL']} "
+                f"Blockers={eligibility.diagnostics['action_blockers']}"
+            )
 
     pipeline = {"cycle_id": cycle_id, "status": "COMPLETED", "stage": "DONE", "reason": None}
     if decision is None:
@@ -244,6 +263,19 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         "risk_reason": risk.reason if risk else gate_reason,
         "execution_reason": execution.reason if execution else gate_reason,
         "signal_lot": execution.lot if execution and execution.signal_created else 0.0,
+        "cooldown_remaining_seconds": eligibility.diagnostics["cooldown_remaining_seconds"],
+        "latest_entry_age_seconds": eligibility.diagnostics["latest_entry_age_seconds"],
+        "latest_entry_server_time": eligibility.diagnostics["latest_entry_server_time"],
+        "riri_position_count": eligibility.diagnostics["riri_positions"],
+        "foreign_position_count": eligibility.diagnostics["foreign_positions"],
+        "riri_position_profit": eligibility.diagnostics["riri_profit"],
+        "buy_gate_reason": eligibility.action_reasons["BUY"],
+        "sell_gate_reason": eligibility.action_reasons["SELL"],
+        "buy_blockers": "|".join(eligibility.diagnostics["action_blockers"]["BUY"]) or "NONE",
+        "sell_blockers": "|".join(eligibility.diagnostics["action_blockers"]["SELL"]) or "NONE",
+        "buy_min_confidence": eligibility.required_confidence["BUY"],
+        "sell_min_confidence": eligibility.required_confidence["SELL"],
+        "ai_retry_after_seconds": ai_gate["retry_after_seconds"],
     }
 
 

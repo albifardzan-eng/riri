@@ -84,6 +84,7 @@ class AITrader:
         fundamental,
         pattern,
         allowed_actions=("BUY", "SELL"),
+        required_confidence=None,
     ) -> TraderDecision:
 
         started = time.monotonic()
@@ -143,6 +144,11 @@ class AITrader:
         if not allowed_actions:
             raise ValueError("AITrader requires at least one executable action")
         executable_actions = ", ".join(allowed_actions)
+        required_confidence = required_confidence or {}
+        confidence_rules = self._serialize_data({
+            action: max(MIN_CONFIDENCE, required_confidence.get(action, MIN_CONFIDENCE))
+            for action in allowed_actions
+        })
 
         prompt = f"""
 You are RIRI, an institutional XAUUSD short-term trading AI.
@@ -197,6 +203,16 @@ The deterministic risk rules permit new entries only for:
 
 Do not choose any other direction. Choose NONE when the
 permitted direction has no sufficiently strong edge.
+
+Minimum confidence for each permitted direction:
+{confidence_rules}
+
+A new hedge or addition to a losing RIRI position requires BOTH
+initial score >80 and confidence >80 (81-100), not 80. Assess each
+new entry on fresh technical and fundamental evidence, never just
+to recover a loss. Other-EA positions are account context, not RIRI
+positions. Do not inflate confidence to unlock an entry. Return NONE
+if no permitted direction independently meets its threshold.
 
 ==================================================
 CORE ANALYSIS
@@ -512,8 +528,12 @@ Only JSON.
 
             if decision == "NONE":
                 return finish("COMPLETED", "AI_NO_TRADE")
+            if decision not in allowed_actions:
+                return finish("FILTERED", "AI_DIRECTION_NOT_ALLOWED")
             if confidence < MIN_CONFIDENCE:
                 return finish("FILTERED", "CONFIDENCE_BELOW_60")
+            if confidence < required_confidence.get(decision, MIN_CONFIDENCE):
+                return finish("FILTERED", "POSITION_EXCEPTION_REQUIRES_CONFIDENCE_ABOVE_80")
             reason = (
                 "AI_DIRECTION_SELECTED_REDUCED_RISK"
                 if confidence < STANDARD_CONFIDENCE

@@ -11,6 +11,9 @@ struct RiriSignal
    int tp_points;
    int sl_points;
    int confidence;
+   int initial_score;
+   int entry_policy_version;
+   long magic_number;
    long market_time;
    long expires_at;
 };
@@ -104,7 +107,10 @@ double RIRI_JsonNumber(string json, string key, double fallback = 0.0)
          break;
       finish++;
    }
-   return finish > start ? StringToDouble(StringSubstr(json, start, finish - start)) : fallback;
+   string raw = StringSubstr(json, start, finish - start);
+   if(raw == "null" || raw == "")
+      return fallback;
+   return StringToDouble(raw);
 }
 
 
@@ -131,6 +137,17 @@ void RIRI_PrintAnalysis(string response)
       " risk=", RIRI_JsonString(response, "risk_reason"),
       " execution=", RIRI_JsonString(response, "execution_reason"),
       " signal_lot=", DoubleToString(RIRI_JsonNumber(response, "signal_lot", 0.0), 2));
+   Print("[ENTRY_GATE] cooldown_remaining_s=", (int)RIRI_JsonNumber(response, "cooldown_remaining_seconds", -1),
+      " last_entry_age_s=", (long)RIRI_JsonNumber(response, "latest_entry_age_seconds", -1),
+      " last_entry_broker_epoch=", (long)RIRI_JsonNumber(response, "latest_entry_server_time", -1),
+      " riri_positions=", (int)RIRI_JsonNumber(response, "riri_position_count"),
+      " other_positions=", (int)RIRI_JsonNumber(response, "foreign_position_count"),
+      " riri_profit=", DoubleToString(RIRI_JsonNumber(response, "riri_position_profit"), 2),
+      " BUY=", RIRI_JsonString(response, "buy_blockers"),
+      " buy_min_conf=", (int)RIRI_JsonNumber(response, "buy_min_confidence"),
+      " SELL=", RIRI_JsonString(response, "sell_blockers"),
+      " sell_min_conf=", (int)RIRI_JsonNumber(response, "sell_min_confidence"),
+      " ai_retry_s=", (int)RIRI_JsonNumber(response, "ai_retry_after_seconds"));
 }
 
 
@@ -159,6 +176,9 @@ bool GetSignal(RiriSignal &signal)
    signal.tp_points = (int)RIRI_JsonNumber(response, "tp_points");
    signal.sl_points = (int)RIRI_JsonNumber(response, "sl_points");
    signal.confidence = (int)RIRI_JsonNumber(response, "confidence");
+   signal.initial_score = (int)RIRI_JsonNumber(response, "initial_score");
+   signal.entry_policy_version = (int)RIRI_JsonNumber(response, "entry_policy_version");
+   signal.magic_number = (long)RIRI_JsonNumber(response, "magic_number");
    signal.market_time = (long)RIRI_JsonNumber(response, "market_time");
    signal.expires_at = (long)RIRI_JsonNumber(response, "expires_at_epoch");
 

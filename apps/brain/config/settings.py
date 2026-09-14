@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # can emit the small structured decision payload.
     OPENAI_MAX_OUTPUT_TOKENS: int = Field(default=2048, ge=256, le=8192)
     AI_MIN_CALL_INTERVAL_SECONDS: int = Field(default=60, ge=10, le=3600)
+    AI_EVENT_MIN_INTERVAL_SECONDS: int = Field(default=30, ge=10, le=3600)
+    AI_PRICE_CHANGE_ATR: float = Field(default=0.25, gt=0)
 
     # Shared secrets are intentionally required at runtime and must never be
     # committed. MT5 uses RIRI_MT5_API_KEY; the server-rendered dashboard uses
@@ -48,7 +50,7 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "RIRI"
 
-    APP_VERSION: str = "1.2.0"
+    APP_VERSION: str = "1.3.0"
 
     SIGNAL_EXPIRY_SECONDS: int = 60
     SIGNAL_DELIVERY_LEASE_SECONDS: int = 15

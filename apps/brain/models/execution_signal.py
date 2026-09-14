@@ -13,6 +13,9 @@ class ExecutionSignal(BaseModel):
     tp_points: int
     sl_points: int
     confidence: int = Field(ge=60, le=100)
+    initial_score: int = Field(ge=70, le=100)
+    entry_policy_version: int
+    magic_number: int
     account_id: str
     terminal_id: str
     instance_id: str

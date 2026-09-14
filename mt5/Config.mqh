@@ -11,16 +11,19 @@ input ENUM_TIMEFRAMES CANDLE_TIMEFRAME = PERIOD_H1;
 input int ATR_PERIOD = 14;
 input double DEFAULT_SLIPPAGE = 10;
 input string EA_NAME = "RIRI Executor";
-input string EA_VERSION = "1.2.0";
+input string EA_VERSION = "1.3.0";
 
 const string MARKET_ENDPOINT = "/mt5/market";
 const string SIGNAL_ENDPOINT = "/execution/pending";
 const string CONFIRM_ENDPOINT = "/execution/confirm";
 const string TRADE_EVENT_ENDPOINT = "/execution/trade-event";
 
-// Immutable RIRI v1 rules.
+// RIRI v1.3 policy: no martingale; averaging/hedging conditional on >80/>80.
 const string RIRI_SYMBOL = "XAUUSD";
 const long MAGIC_NUMBER = 20260701;
+const int RIRI_ENTRY_POLICY_VERSION = 2;
+const int RIRI_MIN_ENTRY_INTERVAL_SECONDS = 15 * 60;
+const int RIRI_EXCEPTION_THRESHOLD = 80;
 const int RIRI_MIN_CONFIDENCE = 60;
 const int RIRI_STANDARD_CONFIDENCE = 70;
 const double RIRI_REDUCED_CONFIDENCE_LOT = 0.01;

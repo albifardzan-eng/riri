@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 BRAIN_DIR = Path(__file__).resolve().parents[1]
@@ -35,6 +36,12 @@ from config.settings import settings
 from fastapi.testclient import TestClient
 from main import app
 
+# The clock/session is deterministic in the offline suite, including tests
+# that exercise execution outside London/NY hours in CI.
+_session_patch = patch.object(ScoringEngine, "_session", return_value=15)
+_session_patch.start()
+atexit.register(_session_patch.stop)
+
 
 def candle_series():
     start = int(time.time()) - 100 * 3600
@@ -56,6 +63,10 @@ def market(**overrides):
         "symbol": "XAUUSD",
         "timeframe": "H1",
         "market_time": int(time.time()),
+        "server_time": int(time.time()),
+        "executor_policy_version": 2,
+        "trade_allowed": True,
+        "hedging_account": True,
         "account_id": "1001",
         "terminal_id": "broker-demo",
         "instance_id": "primary",
@@ -92,7 +103,7 @@ class RiskRuleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(result.approved)
                 self.assertEqual(result.reason, expected)
 
-    async def test_hedging_and_averaging_are_rejected(self):
+    async def test_hedging_and_averaging_require_score_above_80(self):
         position = {
             "ticket": 1,
             "symbol": "XAUUSD",
@@ -105,15 +116,17 @@ class RiskRuleTests(unittest.IsolatedAsyncioTestCase):
             "tp": 2310.0,
             "magic_number": 20260701,
         }
-        hedge = await AIRisk().evaluate(
-            market(positions=[position]), TraderDecision(decision="SELL", confidence=90)
-        )
-        self.assertEqual(hedge.reason, "HEDGING_FORBIDDEN")
-        position["profit"] = -1.0
-        average = await AIRisk().evaluate(
-            market(positions=[position]), TraderDecision(decision="BUY", confidence=90)
-        )
-        self.assertEqual(average.reason, "AVERAGING_FORBIDDEN")
+        score = ScoringEngine().calculate(market()).model_copy(update={"score": 80})
+        with patch.object(ScoringEngine, "calculate", return_value=score):
+            hedge = await AIRisk().evaluate(
+                market(positions=[position]), TraderDecision(decision="SELL", confidence=90)
+            )
+            self.assertEqual(hedge.reason, "HEDGING_REQUIRES_SCORE_ABOVE_80")
+            position["profit"] = -1.0
+            average = await AIRisk().evaluate(
+                market(positions=[position]), TraderDecision(decision="BUY", confidence=90)
+            )
+            self.assertEqual(average.reason, "AVERAGING_REQUIRES_SCORE_ABOVE_80")
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
