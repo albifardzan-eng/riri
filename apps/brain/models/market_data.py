@@ -2,7 +2,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class Candle(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     time: int = Field(gt=0)
     open: float = Field(gt=0)
     high: float = Field(gt=0)
@@ -20,7 +20,7 @@ class Candle(BaseModel):
 
 
 class Position(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     ticket: int = Field(gt=0)
     symbol: str
     type: str
@@ -50,7 +50,7 @@ class Position(BaseModel):
 
 
 class FundamentalData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     available: bool = False
     high_impact_news: bool = False
     event: str | None = None
@@ -71,16 +71,54 @@ class FundamentalData(BaseModel):
         return self
 
 
+class PendingOrder(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    ticket: int = Field(gt=0)
+    symbol: str
+    type: str
+    lot: float = Field(gt=0)
+    open_price: float = Field(gt=0)
+    sl: float = Field(ge=0)
+    magic_number: int
+
+    @model_validator(mode="after")
+    def validate_order(self):
+        if self.symbol != "XAUUSD" or self.type not in {"BUY", "SELL"}:
+            raise ValueError("invalid pending order")
+        return self
+
+
+class BrokerSession(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    valid: bool = False
+    close_time: int = Field(default=0, ge=0)
+    next_open_time: int = Field(default=0, ge=0)
+    weekly: bool = False
+
+    @model_validator(mode="after")
+    def validate_session(self):
+        if self.valid and (self.close_time <= 0 or self.next_open_time <= self.close_time):
+            raise ValueError("invalid broker session boundary")
+        return self
+
+
 class MarketData(BaseModel):
     """Strict, account-scoped MT5 snapshot consumed by the decision pipeline."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     symbol: str
     timeframe: str
     market_time: int = Field(gt=0)
     # Same broker clock as POSITION_TIME; legacy executors fail entry preflight.
     server_time: int = Field(default=0, ge=0)
     executor_policy_version: int = Field(default=0, ge=0)
+    last_entry_server_time: int = Field(default=0, ge=0)
+    history_ready: bool = False
+    account_currency: str = ""
+    tick_age_seconds: int = Field(default=0, ge=0)
+    broker_session: BrokerSession = Field(default_factory=BrokerSession)
+    pending_orders: list[PendingOrder] = Field(default_factory=list, max_length=100)
+    timeframes: dict[str, list[Candle]] = Field(default_factory=dict)
     trade_allowed: bool = False
     hedging_account: bool = False
     account_id: str = Field(min_length=1, max_length=64)
@@ -120,12 +158,24 @@ class MarketData(BaseModel):
 
     @model_validator(mode="after")
     def validate_quote(self):
+        if any(k not in {"M5", "M15", "H1", "H4"} or not 20 <= len(v) <= 120
+               for k, v in self.timeframes.items()):
+            raise ValueError("invalid multi-timeframe candles")
+        if len({p.ticket for p in self.positions}) != len(self.positions):
+            raise ValueError("duplicate position ticket")
+        if len({p.ticket for p in self.pending_orders}) != len(self.pending_orders):
+            raise ValueError("duplicate pending order ticket")
         if self.ask <= self.bid:
             raise ValueError("ask must be greater than bid")
         calculated = (self.ask - self.bid) / self.point
         if abs(calculated - self.spread) > 1.0:
             raise ValueError("spread does not match bid, ask, and point")
         return self
+
+    @property
+    def account_key(self) -> str:
+        import json
+        return json.dumps([self.terminal_id, self.account_id, self.symbol, 20260701], separators=(",", ":"))
 
     @property
     def identity_key(self) -> str:

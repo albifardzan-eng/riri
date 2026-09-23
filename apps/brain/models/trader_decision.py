@@ -31,6 +31,11 @@ class TraderDecision(BaseModel):
 
     # Backend-generated diagnostics, never requested from the model or sent
     # as instructions to MT5. UNKNOWN preserves the meaning of legacy rows.
+    rationale: str = ""
+    scenarios: dict[str, str] = Field(default_factory=dict)
+    prompt_version: str = ""
+    prompt_hash: str | None = None
+    model: str = ""
     status: Literal["UNKNOWN", "COMPLETED", "FILTERED", "ERROR", "UNAVAILABLE"] = "UNKNOWN"
     latency_ms: int | None = Field(default=None, ge=0)
     input_tokens: int | None = Field(default=None, ge=0)

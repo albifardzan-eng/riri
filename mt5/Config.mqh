@@ -11,7 +11,21 @@ input ENUM_TIMEFRAMES CANDLE_TIMEFRAME = PERIOD_H1;
 input int ATR_PERIOD = 14;
 input double DEFAULT_SLIPPAGE = 10;
 input string EA_NAME = "RIRI Executor";
-input string EA_VERSION = "1.3.0";
+input string EA_VERSION = "1.4.0-part1";
+
+input bool RIRI_SMALL_EQUITY_STRICT = true;
+input bool RIRI_EXPERIMENTAL_SPREAD = false;
+input bool RIRI_REVIEW_EXECUTE = false;
+input bool RIRI_PRECLOSE_ENABLED = false;
+// 0 disables the unsettled cap/threshold. Values must match the backend.
+input double RIRI_MAX_SL_RISK_PERCENT = 0;
+input int RIRI_HOLD_MIN_CONFIDENCE = 0;
+input bool RIRI_TRAILING_ENABLED = false;
+input int RIRI_TRAILING_START_POINTS = 0;
+input int RIRI_BREAK_EVEN_COST_POINTS = 0;
+input double RIRI_TRAILING_ATR_MULTIPLIER = 0;
+input int RIRI_TRAILING_STEP_POINTS = 0;
+input ENUM_TIMEFRAMES RIRI_TRAILING_TIMEFRAME = PERIOD_M15;
 
 const string MARKET_ENDPOINT = "/mt5/market";
 const string SIGNAL_ENDPOINT = "/execution/pending";
@@ -21,7 +35,7 @@ const string TRADE_EVENT_ENDPOINT = "/execution/trade-event";
 // RIRI v1.3 policy: no martingale; averaging/hedging conditional on >80/>80.
 const string RIRI_SYMBOL = "XAUUSD";
 const long MAGIC_NUMBER = 20260701;
-const int RIRI_ENTRY_POLICY_VERSION = 2;
+const int RIRI_ENTRY_POLICY_VERSION = 3;
 const int RIRI_MIN_ENTRY_INTERVAL_SECONDS = 15 * 60;
 const int RIRI_EXCEPTION_THRESHOLD = 80;
 const int RIRI_MIN_CONFIDENCE = 60;

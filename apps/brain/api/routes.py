@@ -4,8 +4,9 @@ from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
-from config.settings import settings
+from config.settings import BUILD_REVISION, settings
 from config.trading_config import SL_POINTS, TP_POINTS
 from models.execution import ExecutionConfirmation, TradeCloseEvent
 from models.market_data import MarketData
@@ -23,6 +24,8 @@ from services.market_store import market_store
 from services.signal_store import signal_store
 from services.snapshot_guard import snapshot_guard
 from services.trade_journal import trade_journal
+from services.position_review import position_review
+from services.multiframe import context as multiframe_context
 from trader.trader import AITrader
 from utils.logger import logger
 
@@ -58,7 +61,7 @@ def assert_identity(data: MarketData, identity: MT5Identity) -> None:
 
 @router.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "version": settings.APP_VERSION, "entry_policy_version": 3, "revision": BUILD_REVISION}
 
 
 @router.get("/ready")
@@ -95,6 +98,7 @@ async def receive_market_data(data: MarketData, identity: MT5Identity = Depends(
             raise HTTPException(status_code=422, detail="stale or future market snapshot")
         if not snapshot_guard.accept(key, data.market_time):
             raise HTTPException(status_code=409, detail="replayed or out-of-order market snapshot")
+        data = signal_store.reconcile_market(data)
         cycle_id = market_store.begin_cycle(key, data)
         try:
             return await analyze_market_cycle(data, key, cycle_id)
@@ -175,6 +179,7 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
     if score.qualified and allowed_actions and ai_gate["call"]:
         update("pipeline", {"stage": "AI"})
         market_context = data.model_dump()
+        market_context["multi_timeframe_context"] = multiframe_context(data)
         market_context["entry_policy"] = eligibility.diagnostics
         market_context["required_confidence"] = eligibility.required_confidence
         market_context["target"] = {
@@ -226,6 +231,7 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
         instance_id=data.instance_id,
         symbol=data.symbol,
         market_time=data.market_time,
+        market_snapshot=data.model_dump(mode="json") if decision is not None else None,
         gate_reason=gate_reason,
         ai_gate=ai_gate,
         pipeline=pipeline,
@@ -279,6 +285,19 @@ async def analyze_market_cycle(data: MarketData, key: str, cycle_id: str):
     }
 
 
+@router.post("/positions/review")
+async def review_positions(data: MarketData, identity: MT5Identity = Depends(require_mt5)):
+    assert_identity(data, identity)
+    # Separate replay lane: never consumes or is blocked by the entry throttle.
+    if not snapshot_guard.accept("review:" + identity.key, data.market_time):
+        raise HTTPException(status_code=409, detail="replayed review snapshot")
+    result = await position_review.analyze(data, ai_trader,
+        statistics_service.analyze(data), await fundamental_service.analyze(data.fundamental),
+        pattern_service.analyze(data))
+    # A single command keeps the executor parser unambiguous and calls bounded.
+    return {"review": result["reviews"][0] if result["reviews"] else None, "reason": result["reason"]}
+
+
 @router.get("/execution/pending")
 async def execution_pending(identity: MT5Identity = Depends(require_mt5)):
     signal = signal_store.claim_signal(identity.key)
@@ -287,23 +306,37 @@ async def execution_pending(identity: MT5Identity = Depends(require_mt5)):
     return {"signal": signal}
 
 
+class EntryPermit(BaseModel):
+    signal_id: str = Field(min_length=1, max_length=64)
+    execution_token: str = Field(min_length=16, max_length=128)
+
+
+@router.post("/execution/authorize")
+async def authorize_entry(payload: EntryPermit, identity: MT5Identity = Depends(require_mt5)):
+    if not signal_store.authorize(identity.key, payload.signal_id, payload.execution_token):
+        raise HTTPException(status_code=409, detail="submission already authorized or signal expired")
+    return {"authorized": True}
+
+
 @router.post("/execution/confirm")
 async def execution_confirm(
     payload: ExecutionConfirmation,
     identity: MT5Identity = Depends(require_mt5),
 ):
     confirmation_status = payload.status.upper()
-    if confirmation_status not in {"EXECUTED", "REJECTED"}:
+    if confirmation_status not in {"EXECUTED", "REJECTED", "UNKNOWN"}:
         raise HTTPException(status_code=422, detail="status must be EXECUTED or REJECTED")
     signal = signal_store.confirm(
         identity.key,
         payload.signal_id,
         payload.action,
         payload.requested_lot,
+        outcome=payload.status, entry_server_time=payload.entry_server_time,
+        execution_token=payload.execution_token,
     )
     if signal is None:
         raise HTTPException(status_code=409, detail="signal missing, expired, or belongs to another identity")
-    event = "TRADE_EXECUTED" if confirmation_status == "EXECUTED" else "TRADE_REJECTED"
+    event = {"EXECUTED": "TRADE_EXECUTED", "REJECTED": "TRADE_REJECTED", "UNKNOWN": "TRADE_UNCONFIRMED"}[confirmation_status]
     record = trade_journal.event(
         event,
         account_id=identity.account_id,

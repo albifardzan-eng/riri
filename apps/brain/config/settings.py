@@ -5,6 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+_revision_file = BASE_DIR.parent.parent / "REVISION"
+BUILD_REVISION = _revision_file.read_text().strip() if _revision_file.is_file() else "development"
 
 
 class Settings(BaseSettings):
@@ -50,7 +52,17 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "RIRI"
 
-    APP_VERSION: str = "1.3.0"
+    APP_VERSION: str = "1.4.0-part1"
+    # Unsettled parameters are opt-in; no invented portfolio-risk cap.
+    SMALL_EQUITY_STRICT: bool = True
+    EXPERIMENTAL_SPREAD: bool = False
+    MAX_SL_RISK_EQUITY_PERCENT: float | None = Field(default=None, gt=0, le=100)
+    POSITION_REVIEW_ENABLED: bool = True
+    POSITION_REVIEW_EXECUTE: bool = False
+    POSITION_REVIEW_REPEAT_SECONDS: int = Field(default=900, ge=60)
+    PRECLOSE_ENABLED: bool = False
+    PRECLOSE_HOLD_MIN_CONFIDENCE: int | None = Field(default=None, ge=1, le=100)
+    REVIEW_MAX_CALLS_PER_CYCLE: int = Field(default=1, ge=1, le=1)
 
     SIGNAL_EXPIRY_SECONDS: int = 60
     SIGNAL_DELIVERY_LEASE_SECONDS: int = 15

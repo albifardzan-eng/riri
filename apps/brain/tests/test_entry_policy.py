@@ -249,7 +249,7 @@ class PromptPolicyTests(unittest.IsolatedAsyncioTestCase):
         for action, conf, expected in (("BUY", 80, "NONE"), ("BUY", 81, "BUY"),
                                       ("SELL", 99, "NONE"), ("NONE", 0, "NONE")):
             trader = AITrader()
-            call = AsyncMock(return_value=NS(status="completed", output_text=json.dumps({"decision": action, "confidence": conf})))
+            call = AsyncMock(return_value=NS(status="completed", output_text=json.dumps(fixtures.ai_payload(action,conf))))
             trader.client = NS(responses=NS(create=call))
             result = await trader.decide({"live": "market"}, {"live": "statistics"},
                 {"live": "fundamental"}, {"live": "pattern"}, allowed_actions=("BUY",),
@@ -300,9 +300,9 @@ class MT5ContractTests(unittest.TestCase):
         config = (root / "Config.mqh").read_text()
         self.assertIn("RIRI_MIN_ENTRY_INTERVAL_SECONDS = 15 * 60", config)
         self.assertIn("RIRI_EXCEPTION_THRESHOLD = 80", config)
-        self.assertIn("RIRI_ENTRY_POLICY_VERSION = 2", config)
+        self.assertIn("RIRI_ENTRY_POLICY_VERSION = 3", config)
         self.assertIn("PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER", trading)
-        self.assertEqual(trading.count("if(!RIRI_SelectedPosition())"), 3)
+        self.assertIn("return RIRI_ReconcileEntry();", trading)
         self.assertIn("signal.initial_score <= RIRI_EXCEPTION_THRESHOLD", trading)
         self.assertIn("signal.confidence <= RIRI_EXCEPTION_THRESHOLD", trading)
         self.assertIn("signal.entry_policy_version != RIRI_ENTRY_POLICY_VERSION", trading)

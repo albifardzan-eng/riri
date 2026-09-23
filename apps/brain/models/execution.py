@@ -14,7 +14,7 @@ class ExecutionResult(BaseModel):
 class ExecutionConfirmation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     signal_id: str
-    status: Literal["EXECUTED", "REJECTED"]
+    status: Literal["EXECUTED", "REJECTED", "UNKNOWN"]
     action: Literal["BUY", "SELL"]
     order_id: int = Field(default=0, ge=0)
     deal_id: int = Field(default=0, ge=0)
@@ -23,6 +23,8 @@ class ExecutionConfirmation(BaseModel):
     executed_price: float = Field(default=0.0, ge=0)
     retcode: int = Field(default=0, ge=0)
     reason: str = ""
+    entry_server_time: int = Field(default=0, ge=0)
+    execution_token: str = Field(default="", max_length=128)
 
     @model_validator(mode="after")
     def validate_outcome(self):

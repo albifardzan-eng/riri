@@ -14,6 +14,7 @@ from models.execution_signal import ExecutionSignal
 from services.signal_store import signal_store
 from services.entry_eligibility import entry_rejection, riri_positions
 from scoring.scoring_engine import ScoringEngine
+from services.exposure import exposure
 
 
 class ExecutionService:
@@ -34,7 +35,7 @@ class ExecutionService:
             return self._result("SIGNAL_PENDING")
 
         positions = riri_positions(market)
-        active_lot = sum(float(position.lot) for position in positions)
+        active_lot = exposure(market)["gross_lot"]
         # A 60-69 probability is an executable but reduced-risk setup. It
         # never receives the normal equity-based size. 70+ retains the locked
         # sizing formula unchanged.
@@ -48,6 +49,9 @@ class ExecutionService:
         if lot <= 0:
             return self._result("INVALID_OR_EXHAUSTED_LOT")
 
+        if not exposure(market, lot)["risk_allowed"]:
+            return self._result("PORTFOLIO_SL_RISK_LIMIT")
+
         now = datetime.now(timezone.utc)
         signal = ExecutionSignal(
             signal_id=str(uuid.uuid4()),
@@ -59,6 +63,10 @@ class ExecutionService:
             confidence=decision.confidence,
             initial_score=score,
             entry_policy_version=ENTRY_POLICY_VERSION,
+            max_spread_points=(150 if score>80 and decision.confidence>95 else 60) if settings.EXPERIMENTAL_SPREAD else 30,
+            small_equity_strict=settings.SMALL_EQUITY_STRICT,
+            max_sl_risk_percent=settings.MAX_SL_RISK_EQUITY_PERCENT or 0,
+            preclose_enabled=settings.PRECLOSE_ENABLED,
             magic_number=RIRI_MAGIC_NUMBER,
             account_id=market.account_id,
             terminal_id=market.terminal_id,
@@ -69,7 +77,9 @@ class ExecutionService:
             created_at_epoch=int(now.timestamp()),
             expires_at_epoch=int(now.timestamp()) + settings.SIGNAL_EXPIRY_SECONDS,
         )
-        signal_store.set_signal(market.identity_key, signal)
+        reservation_error = signal_store.reserve(market, signal)
+        if reservation_error:
+            return self._result(reservation_error)
         return ExecutionResult(
             signal_created=True,
             order_type=decision.decision,

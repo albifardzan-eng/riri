@@ -5,6 +5,7 @@
 #include "Http.mqh"
 #include "Trading.mqh"
 #include "Utils.mqh"
+#include "Protection.mqh"
 
 
 //==================================================
@@ -36,6 +37,10 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
+   if(RIRI_TRAILING_ENABLED && (RIRI_TRAILING_START_POINTS<=0 || RIRI_TRAILING_STEP_POINTS<=0 ||
+      RIRI_TRAILING_ATR_MULTIPLIER<=0 || RIRI_BREAK_EVEN_COST_POINTS<0))
+      return INIT_PARAMETERS_INCORRECT;
+   if(RIRI_ReconcileEntry()<0) Print("[INIT] Entry history unavailable; entries will fail closed.");
    if(!EventSetTimer(TIMER_SECONDS))
       return INIT_FAILED;
 
@@ -104,6 +109,9 @@ void ProcessCycle()
    // SEND MARKET
    //================================================
 
+   RIRI_Protect();
+   RIRI_ReviewPositions();
+   RIRI_Protect();
    bool marketSent =
       SendMarket();
 
@@ -143,6 +151,7 @@ void ProcessCycle()
 
 void OnTick()
 {
+   RIRI_Protect();
 }
 
 
@@ -177,9 +186,15 @@ void OnTradeTransaction(
          "Deal Executed"
       );
 
-      ReportTradeClose(
-         trans.deal
-      );
+      if(HistoryDealSelect(trans.deal) && HistoryDealGetString(trans.deal,DEAL_SYMBOL)==RIRI_SYMBOL &&
+         HistoryDealGetInteger(trans.deal,DEAL_MAGIC)==MAGIC_NUMBER &&
+         HistoryDealGetInteger(trans.deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+         RIRI_RecordEntry(HistoryDealGetInteger(trans.deal,DEAL_TIME));
+      if(HistoryDealSelect(trans.deal) && HistoryDealGetString(trans.deal,DEAL_SYMBOL)==RIRI_SYMBOL &&
+         HistoryDealGetInteger(trans.deal,DEAL_MAGIC)==MAGIC_NUMBER &&
+         (HistoryDealGetInteger(trans.deal,DEAL_ENTRY)==DEAL_ENTRY_OUT || HistoryDealGetInteger(trans.deal,DEAL_ENTRY)==DEAL_ENTRY_OUT_BY))
+         GlobalVariableDel(RIRI_StateKey(StringFormat("close_%I64u",trans.position)));
+      ReportTradeClose(trans.deal);
    }
 }
 
