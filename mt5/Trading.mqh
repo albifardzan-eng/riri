@@ -2,6 +2,8 @@
 #define __RIRI_TRADING_MQH__
 
 
+bool RIRI_RiskCapAllowed(double lot,string direction,double signal_cap);
+
 bool RIRI_SelectedPosition()
 {
    return PositionGetString(POSITION_SYMBOL) == _Symbol &&
@@ -42,21 +44,7 @@ int RIRI_PositionCount(double &total_lot)
 
 long RIRI_LatestPositionTime()
 {
-   long latest = 0;
-   for(int i = 0; i < PositionsTotal(); i++)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0 || !PositionSelectByTicket(ticket))
-         continue;
-      if(!RIRI_SelectedPosition())
-         continue;
-      long opened = PositionGetInteger(POSITION_TIME);
-      if(opened <= 0 || opened > (long)TimeCurrent())
-         return -1;
-      if(opened > latest)
-         latest = opened;
-   }
-   return latest;
+   return RIRI_ReconcileEntry();
 }
 
 
@@ -134,7 +122,10 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
       reason = "STALE_SIGNAL";
       return false;
    }
-   if(CurrentSpread() > RIRI_MAX_SPREAD)
+   double spread_limit=RIRI_EXPERIMENTAL_SPREAD?60.0:RIRI_MAX_SPREAD;
+   if(RIRI_EXPERIMENTAL_SPREAD && signal.initial_score>80 && signal.confidence>95) spread_limit=150;
+   spread_limit=MathMin(spread_limit,signal.max_spread_points);
+   if(spread_limit<=0 || CurrentSpread() > spread_limit)
    {
       reason = "SPREAD_ABOVE_LIMIT";
       return false;
@@ -158,15 +149,23 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
       return false;
    }
 
-   double active_lot = 0.0;
-   int active = RIRI_PositionCount(active_lot);
+   if(AccountInfoString(ACCOUNT_CURRENCY)!="USD") {reason="USD_ACCOUNT_REQUIRED";return false;}
+   if((RIRI_SMALL_EQUITY_STRICT || signal.small_equity_strict) && AccountInfoDouble(ACCOUNT_EQUITY)<=500 && signal.confidence<=85)
+   {reason="SMALL_EQUITY_REQUIRES_CONFIDENCE_ABOVE_85";return false;}
+   if(!RIRI_EntrySessionAllowed(signal.preclose_enabled)) {reason="PRECLOSE_ENTRY_BLOCKED";return false;}
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol,tick) || (long)TimeTradeServer()-(long)tick.time>10)
+   {reason="STALE_TICK";return false;}
+   double active_lot = 0.0, pending_lot=0;
+   int active = RIRI_PositionCount(active_lot)+RIRI_PendingCount(pending_lot);
+   active_lot+=pending_lot;
    if(active >= RIRI_MAX_ACTIVE_TRADES)
    {
       reason = "MAX_ACTIVE_TRADES";
       return false;
    }
    long latest_open = RIRI_LatestPositionTime();
-   if(latest_open < 0)
+   if(latest_open < 0 || latest_open>(long)TimeCurrent())
    {
       reason = "POSITION_TIME_INVALID";
       return false;
@@ -208,6 +207,7 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
       reason = "MAX_TOTAL_LOT";
       return false;
    }
+   if(!RIRI_RiskCapAllowed(lot,signal.action,signal.max_sl_risk_percent)) {reason="PORTFOLIO_SL_RISK_LIMIT";return false;}
    return true;
 }
 
@@ -277,12 +277,16 @@ bool RIRI_SendOrder(const RiriSignal &signal, double lot)
       return false;
    }
 
+   // Permit is consumed once globally; ambiguity must never result in resubmission.
+   if(!ConfirmSignal(signal,"UNKNOWN",0,0,0,0,0,"BROKER_OUTCOME_UNKNOWN")) return false;
    bool sent = OrderSend(request, result);
    bool filled = sent && (result.retcode == TRADE_RETCODE_DONE ||
       result.retcode == TRADE_RETCODE_DONE_PARTIAL);
+   if(filled) RIRI_RecordEntry((long)TimeCurrent());
+   bool uncertain=!sent || result.retcode==TRADE_RETCODE_PLACED || result.retcode==TRADE_RETCODE_TIMEOUT || result.retcode==TRADE_RETCODE_CONNECTION;
    ConfirmSignal(
       signal,
-      filled ? "EXECUTED" : "REJECTED",
+      filled ? "EXECUTED" : uncertain ? "UNKNOWN" : "REJECTED",
       result.order,
       result.deal,
       filled ? result.volume : 0.0,
@@ -305,23 +309,32 @@ bool RIRI_SendOrder(const RiriSignal &signal, double lot)
 bool ExecuteSignal()
 {
    RiriSignal signal;
-   if(!GetSignal(signal))
-      return false;
-
-   double lot = 0.0;
-   string reason = "";
-   if(!RIRI_ValidateSignal(signal, lot, reason))
+   if(!GetSignal(signal)) return false;
+   double lot=0;string reason="";
+   if(!RIRI_ValidateSignal(signal,lot,reason))
    {
-      Print("[EXECUTION] rejected signal=", signal.signal_id,
-         " action=", signal.action,
-         " score=", signal.initial_score,
-         " confidence=", signal.confidence,
-         " requested_lot=", DoubleToString(signal.lot, 2),
-         " reason=", reason);
-      ConfirmSignal(signal, "REJECTED", 0, 0, 0, 0, 0, reason);
-      return false;
+      ConfirmSignal(signal,"REJECTED",0,0,0,0,0,reason);
+      RIRI_FlushAck(signal.signal_id);return false;
    }
-   return RIRI_SendOrder(signal, lot);
+   signal.execution_token=StringFormat("%I64d-%I64u-%I64d",(long)TimeGMT(),GetMicrosecondCount(),ChartID());
+   string body=StringFormat("{\"signal_id\":\"%s\",\"execution_token\":\"%s\"}",signal.signal_id,signal.execution_token);
+   string response;
+   if(HttpPost("/execution/authorize",body,response)!=200) return false;
+   int lock=RIRI_Lock();
+   if(lock==INVALID_HANDLE)
+   {
+      ConfirmSignal(signal,"REJECTED",0,0,0,0,0,"LOCAL_BROKER_BUSY");
+      RIRI_FlushAck(signal.signal_id);return false;
+   }
+   if(!RIRI_ValidateSignal(signal,lot,reason))
+   {
+      ConfirmSignal(signal,"REJECTED",0,0,0,0,0,reason);
+      FileClose(lock);RIRI_FlushAck(signal.signal_id);return false;
+   }
+   bool done=RIRI_SendOrder(signal,lot);
+   FileClose(lock);
+   RIRI_FlushAck(signal.signal_id);
+   return done;
 }
 
 #endif

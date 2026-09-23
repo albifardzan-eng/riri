@@ -1,0 +1,48 @@
+name: Deploy backend
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: riri-production-backend
+  cancel-in-progress: false
+jobs:
+  deploy:
+    # Enable only after the existing host and EA v3 are verified together.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      vars.RIRI_BACKEND_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: riri-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Deploy verified revision over SSH
+        env:
+          RIRI_SSH_KEY: ${{ secrets.RIRI_SSH_KEY }}
+          RIRI_SSH_KNOWN_HOSTS: ${{ secrets.RIRI_SSH_KNOWN_HOSTS }}
+          RIRI_SSH_HOST: ${{ secrets.RIRI_SSH_HOST }}
+          RIRI_SSH_USER: ${{ secrets.RIRI_SSH_USER }}
+          RIRI_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$RIRI_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$RIRI_SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$RIRI_SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ -n "$RIRI_SSH_KEY" && -n "$RIRI_SSH_KNOWN_HOSTS" ]]
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$RIRI_SSH_KEY" > ~/.ssh/riri_deploy
+          printf '%s\n' "$RIRI_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/riri_deploy' EXIT
+          git archive "$RIRI_SHA" | ssh -i ~/.ssh/riri_deploy \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "$RIRI_SSH_USER@$RIRI_SSH_HOST" \
+            "/usr/local/bin/riri-deploy $RIRI_SHA"

@@ -69,7 +69,7 @@ MIN_ENTRY_INTERVAL_SECONDS = 15 * 60
 # Both score and confidence must be strictly greater than this threshold.
 EXCEPTION_THRESHOLD = 80
 RIRI_MAGIC_NUMBER = 20260701
-ENTRY_POLICY_VERSION = 2
+ENTRY_POLICY_VERSION = 3
 
 MAX_SPREAD = 30.0
 

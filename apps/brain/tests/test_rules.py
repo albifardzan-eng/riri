@@ -58,13 +58,21 @@ def candle_series():
     ]
 
 
+def ai_payload(decision="BUY", confidence=80):
+    return {"decision":decision,"confidence":confidence,"strategy":"TREND" if decision!="NONE" else "NONE",
+            "rationale":"Confirmed setup from supplied candles", "continuation":"Momentum supports continuation",
+            "temporary_reversal":"No rejection confirmation yet"}
+
+
 def market(**overrides):
     values = {
         "symbol": "XAUUSD",
         "timeframe": "H1",
         "market_time": int(time.time()),
         "server_time": int(time.time()),
-        "executor_policy_version": 2,
+        "executor_policy_version": 3,
+        "history_ready": True,
+        "account_currency": "USD",
         "trade_allowed": True,
         "hedging_account": True,
         "account_id": "1001",
@@ -146,7 +154,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
                     (),
                     {
                         "status": "completed",
-                        "output_text": json.dumps({"decision": "BUY", "confidence": 59}),
+                        "output_text": json.dumps(ai_payload("BUY", 59)),
                     },
                 )()
 
@@ -168,7 +176,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
                     (),
                     {
                         "status": "completed",
-                        "output_text": json.dumps({"decision": "BUY", "confidence": 80}),
+                        "output_text": json.dumps(ai_payload("BUY", 80)),
                     },
                 )()
 

@@ -5,6 +5,7 @@
 struct RiriSignal
 {
    string signal_id;
+   string execution_token;
    string symbol;
    string action;
    double lot;
@@ -13,6 +14,10 @@ struct RiriSignal
    int confidence;
    int initial_score;
    int entry_policy_version;
+   double max_spread_points;
+   double max_sl_risk_percent;
+   bool small_equity_strict;
+   bool preclose_enabled;
    long magic_number;
    long market_time;
    long expires_at;
@@ -170,6 +175,21 @@ bool GetSignal(RiriSignal &signal)
       return false;
 
    signal.signal_id = RIRI_JsonString(response, "signal_id");
+   // IDs become filenames, so reject any server output outside UUID characters.
+   if(StringLen(signal.signal_id)!=36) return false;
+   for(int i=0;i<StringLen(signal.signal_id);i++)
+      if(StringFind("0123456789abcdef-",StringSubstr(signal.signal_id,i,1))<0) return false;
+   string ack=RIRI_StateKey("ack_"+signal.signal_id+".json");
+   if(FileIsExist(ack,FILE_COMMON))
+   {
+      int handle=FileOpen(ack,FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+      if(handle!=INVALID_HANDLE)
+      {
+         string body=FileReadString(handle);FileClose(handle);
+         string retry;HttpPost(CONFIRM_ENDPOINT,body,retry);
+      }
+      return false;
+   }
    signal.symbol = RIRI_JsonString(response, "symbol");
    signal.action = RIRI_JsonString(response, "action");
    signal.lot = RIRI_JsonNumber(response, "lot");
@@ -178,6 +198,10 @@ bool GetSignal(RiriSignal &signal)
    signal.confidence = (int)RIRI_JsonNumber(response, "confidence");
    signal.initial_score = (int)RIRI_JsonNumber(response, "initial_score");
    signal.entry_policy_version = (int)RIRI_JsonNumber(response, "entry_policy_version");
+   signal.max_spread_points=RIRI_JsonNumber(response,"max_spread_points",30);
+   signal.max_sl_risk_percent=RIRI_JsonNumber(response,"max_sl_risk_percent",0);
+   signal.small_equity_strict=RIRI_JsonBool(response,"small_equity_strict",true);
+   signal.preclose_enabled=RIRI_JsonBool(response,"preclose_enabled",false);
    signal.magic_number = (long)RIRI_JsonNumber(response, "magic_number");
    signal.market_time = (long)RIRI_JsonNumber(response, "market_time");
    signal.expires_at = (long)RIRI_JsonNumber(response, "expires_at_epoch");
@@ -200,14 +224,26 @@ bool ConfirmSignal(
    string body = StringFormat(
       "{\"signal_id\":\"%s\",\"status\":\"%s\",\"action\":\"%s\","
       "\"order_id\":%I64u,\"deal_id\":%I64u,\"requested_lot\":%.2f,"
-      "\"filled_lot\":%.2f,\"executed_price\":%.5f,\"retcode\":%u,\"reason\":\"%s\"}",
+      "\"filled_lot\":%.2f,\"executed_price\":%.5f,\"retcode\":%u,\"reason\":\"%s\",\"entry_server_time\":%I64d,\"execution_token\":\"%s\"}",
       signal.signal_id, status, signal.action, order_id, deal_id,
       signal.lot, filled_lot, executed_price, retcode,
-      FundamentalJsonSafeString(reason)
+      FundamentalJsonSafeString(reason), status=="EXECUTED"?(long)TimeCurrent():0, signal.execution_token
    );
-   string response;
-   int code = HttpPost(CONFIRM_ENDPOINT, body, response);
-   return code >= 200 && code < 300;
+   string name=RIRI_StateKey("ack_"+signal.signal_id+".json");
+   int handle=FileOpen(name,FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+   if(handle==INVALID_HANDLE) return false;
+   FileWriteString(handle,body);FileFlush(handle);FileClose(handle);
+   // Network delivery is performed after releasing the broker/protection lock.
+   return true;
+}
+
+
+void RIRI_FlushAck(string signal_id)
+{
+   int handle=FileOpen(RIRI_StateKey("ack_"+signal_id+".json"),FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+   if(handle==INVALID_HANDLE) return;
+   string body=FileReadString(handle);FileClose(handle);
+   string response;HttpPost(CONFIRM_ENDPOINT,body,response);
 }
 
 
@@ -221,7 +257,7 @@ bool ReportTradeClose(ulong deal_id)
       return false;
 
    string symbol = HistoryDealGetString(deal_id, DEAL_SYMBOL);
-   if(symbol != RIRI_SYMBOL)
+   if(symbol != RIRI_SYMBOL || HistoryDealGetInteger(deal_id, DEAL_MAGIC) != MAGIC_NUMBER)
       return false;
 
    long deal_type = HistoryDealGetInteger(deal_id, DEAL_TYPE);

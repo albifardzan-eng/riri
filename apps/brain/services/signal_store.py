@@ -6,6 +6,7 @@ from threading import Lock
 from typing import Any
 
 from config.settings import BASE_DIR, settings
+from services import entry_state
 
 
 class SignalStore:
@@ -19,6 +20,7 @@ class SignalStore:
         self._lock = Lock()
         with self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
+            entry_state.initialize(db)
             db.execute(
                 """CREATE TABLE IF NOT EXISTS pending_signals (
                     identity_key TEXT PRIMARY KEY,
@@ -35,6 +37,30 @@ class SignalStore:
     @staticmethod
     def _serialize(signal: Any) -> dict[str, Any]:
         return signal.model_dump(mode="json") if hasattr(signal, "model_dump") else dict(signal)
+
+    def reconcile_market(self, market):
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            latest = entry_state.reconcile(db, market)
+            db.commit()
+            return market.model_copy(update={"last_entry_server_time": latest})
+
+    def reserve(self, market, signal):
+        with self._lock, self._connect() as db:
+            return entry_state.reserve(db, market, signal)
+
+    def authorize(self, identity_key, signal_id, token):
+        """A broker submission permit is issued ONCE, even across terminals."""
+        now = int(datetime.now(timezone.utc).timestamp())
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT expires_at,delivered_at FROM pending_signals WHERE identity_key=? AND signal_id=?", (identity_key,signal_id)).fetchone()
+            if row is None or row[0] <= now or row[1] is None:
+                db.commit()
+                return False
+            cursor = db.execute("UPDATE account_entry_state SET authorized=? WHERE owner=? AND reservation=? AND authorized IS NULL", (token,identity_key,signal_id))
+            db.commit()
+            return cursor.rowcount == 1
 
     def set_signal(self, identity_key: str, signal: Any) -> None:
         item = self._serialize(signal)
@@ -56,13 +82,14 @@ class SignalStore:
         now = int(datetime.now(timezone.utc).timestamp())
         with self._lock, self._connect() as db:
             row = db.execute(
-                "SELECT payload, expires_at FROM pending_signals WHERE identity_key=?",
+                "SELECT payload, expires_at, delivered_at FROM pending_signals WHERE identity_key=?",
                 (identity_key,),
             ).fetchone()
             if row is None:
                 return None
             if row[1] <= now:
-                db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
+                if row[2] is None:
+                    db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
                 return None
             return json.loads(row[0])
 
@@ -78,7 +105,8 @@ class SignalStore:
                 db.commit()
                 return None
             if row[1] <= now:
-                db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
+                if row[2] is None:
+                    db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
                 db.commit()
                 return None
             if row[2] is not None and now - row[2] < settings.SIGNAL_DELIVERY_LEASE_SECONDS:
@@ -88,6 +116,8 @@ class SignalStore:
                 "UPDATE pending_signals SET delivered_at=? WHERE identity_key=?",
                 (now, identity_key),
             )
+            db.execute("UPDATE account_entry_state SET delivered=? WHERE reservation=?",
+                       (now, json.loads(row[0])["signal_id"]))
             db.commit()
             signal = json.loads(row[0])
             signal["status"] = "DELIVERED"
@@ -99,6 +129,9 @@ class SignalStore:
         signal_id: str,
         action: str | None = None,
         requested_lot: float | None = None,
+        outcome: str = "REJECTED",
+        entry_server_time: int = 0,
+        execution_token: str = "",
     ) -> dict[str, Any] | None:
         with self._lock, self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -119,6 +152,18 @@ class SignalStore:
             ):
                 db.commit()
                 return None
+            permit = db.execute("SELECT authorized FROM account_entry_state WHERE reservation=?", (signal_id,)).fetchone()
+            if permit and permit[0] is not None and str(permit[0]) != execution_token:
+                db.commit()
+                return None
+            if outcome == "UNKNOWN":
+                db.commit()
+                return signal
+            if outcome == "EXECUTED" and entry_server_time <= 0:
+                db.commit()
+                return None
+            db.execute("UPDATE account_entry_state SET last_fill=MAX(last_fill,?),reservation=NULL,delivered=NULL WHERE reservation=?",
+                       (entry_server_time if outcome == "EXECUTED" else 0, signal_id))
             db.execute(
                 "DELETE FROM pending_signals WHERE identity_key=? AND signal_id=?",
                 (identity_key, signal_id),
@@ -129,6 +174,8 @@ class SignalStore:
     def clear(self, identity_key: str) -> None:
         with self._lock, self._connect() as db:
             db.execute("DELETE FROM pending_signals WHERE identity_key=?", (identity_key,))
+            # Explicit administrative/test reset only; never called by normal close.
+            db.execute("DELETE FROM account_entry_state WHERE owner=?", (identity_key,))
 
 
 signal_store = SignalStore()

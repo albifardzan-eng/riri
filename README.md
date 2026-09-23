@@ -4,7 +4,14 @@ RIRI is an account-scoped XAUUSD trading pipeline:
 
 `MT5 executor → deterministic scoring → AI Trader → deterministic risk → leased execution signal → MT5 order → lifecycle journal`
 
-## RIRI v1.3 entry policy
+## Enhancement Part 1 (prepared; rollout pending)
+
+Part 1 requires executor policy 3 and a coordinated backend/EA upgrade. Source
+and automated offline tests are prepared; live SSH rollout, MetaEditor compile
+and broker demo validation are still required. See [Part 1](docs/enhancement-part1.md)
+and [deployment integration](docs/deployment-automation.md).
+
+## RIRI entry policy
 
 - Symbol: `XAUUSD` only
 - Take profit: 1,000 points
@@ -12,14 +19,16 @@ RIRI is an account-scoped XAUUSD trading pipeline:
 - Maximum active RIRI XAUUSD positions (magic `20260701`): 3
 - Maximum gross RIRI volume: 0.50 lot; BUY and SELL volumes are added, not netted
 - No martingale. Averaging/hedging require initial score **>80 AND AI confidence >80**; exactly 80 is not sufficient
-- Entry cooldown: 15 minutes from the newest still-open RIRI position, using the broker clock for both timestamps
+- Entry cooldown: 15 minutes from the last confirmed RIRI fill, persisted across close/restart and reconciled from broker history
 - Other-EA/manual positions remain visible for context but do not reset RIRI cooldown or consume RIRI position limits. Account free margin still applies
 - Confidence 60-69: a reduced fixed 0.01 lot; confidence 70+: 0.01 plus 0.01 for each complete USD 500 of equity, constrained by remaining exposure
 - Score below 70: AI Trader is not called
-- AI confidence below 60: no signal; confidence is the conservative probability that TP is reached before SL
-- Maximum spread: 30 points; minimum ATR: 1.0
+- AI confidence below 60: no signal; confidence estimates TP-before-SL and is not an empirically calibrated probability
+- Equity <=USD500 requires confidence >85 (the boundary/equity convention is explicit in the Part 1 notes)
+- Maximum spread: baseline 30 points; optional trial 60/150, with strict score >80 and confidence >95 for the exception
+- Minimum ATR: 1.0; USD account required until currency conversion is implemented
 
-Policy version 2 requires the v1.3 executor and a hedging-mode account. New and
+Policy version 3 requires the Part 1 executor and a hedging-mode account. New and
 old executors must not run together on the same account/instance. AI keeps the
 right to return NONE; a high self-reported confidence is not a calibrated
 guarantee of success. See [upgrade and verification checklist](docs/entry-policy-v1.3.md).

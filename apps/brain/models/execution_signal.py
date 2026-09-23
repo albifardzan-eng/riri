@@ -15,6 +15,10 @@ class ExecutionSignal(BaseModel):
     confidence: int = Field(ge=60, le=100)
     initial_score: int = Field(ge=70, le=100)
     entry_policy_version: int
+    max_spread_points: float = Field(default=30, gt=0, le=150)
+    small_equity_strict: bool = True
+    max_sl_risk_percent: float = Field(default=0, ge=0, le=100)
+    preclose_enabled: bool = False
     magic_number: int
     account_id: str
     terminal_id: str

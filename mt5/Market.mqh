@@ -2,6 +2,7 @@
 #define RIRI_MARKET_MQH
 
 #include "Fundamental.mqh"
+#include "State.mqh"
 
 
 string RIRI_TimeframeName()
@@ -91,6 +92,51 @@ string BuildPositionsJson()
 }
 
 
+string RIRI_TimeframeCandles(ENUM_TIMEFRAMES frame)
+{
+   MqlRates rates[];
+   int copied=CopyRates(_Symbol,frame,1,60,rates);
+   if(copied<20) return "[]";
+   ArraySetAsSeries(rates,false);
+   string json="[";
+   for(int i=0;i<copied;i++)
+   {
+      if(i>0) json+=",";
+      json+=StringFormat("{\"time\":%I64d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"volume\":%I64d}",
+         (long)rates[i].time,rates[i].open,rates[i].high,rates[i].low,rates[i].close,(long)rates[i].tick_volume);
+   }
+   return json+"]";
+}
+
+string RIRI_MultiFrames()
+{
+   ENUM_TIMEFRAMES frames[4]={PERIOD_M5,PERIOD_M15,PERIOD_H1,PERIOD_H4};
+   string names[4]={"M5","M15","H1","H4"}; string json="{";bool first=true;
+   for(int i=0;i<4;i++)
+   {
+      string candles=RIRI_TimeframeCandles(frames[i]);
+      if(candles=="[]") continue;
+      if(!first) json+=",";first=false;
+      json+="\""+names[i]+"\":"+candles;
+   }
+   return json+"}";
+}
+
+string RIRI_PendingJson()
+{
+   string json="[";bool first=true;
+   for(int i=0;i<OrdersTotal();i++)
+   {
+      ulong ticket=OrderGetTicket(i);
+      if(ticket==0 || !RIRI_SelectedOrder()) continue;
+      if(!first) json+=",";first=false;
+      json+=StringFormat("{\"ticket\":%I64u,\"symbol\":\"%s\",\"type\":\"%s\",\"lot\":%.2f,\"open_price\":%.5f,\"sl\":%.5f,\"magic_number\":%I64d}",
+         ticket,_Symbol,RIRI_IsBuyOrder(OrderGetInteger(ORDER_TYPE))?"BUY":"SELL",
+         OrderGetDouble(ORDER_VOLUME_CURRENT),OrderGetDouble(ORDER_PRICE_OPEN),OrderGetDouble(ORDER_SL),MAGIC_NUMBER);
+   }
+   return json+"]";
+}
+
 string BuildMarketJson()
 {
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -102,7 +148,18 @@ string BuildMarketJson()
    long account = AccountInfoInteger(ACCOUNT_LOGIN);
    string terminal = FundamentalJsonSafeString(AccountInfoString(ACCOUNT_SERVER));
 
+   long latest=RIRI_ReconcileEntry();
+   long close_time,next_open;bool weekly;
+   bool valid_session=RIRI_Session(close_time,next_open,weekly);
+   MqlTick tick;bool quote=SymbolInfoTick(_Symbol,tick);
    string json = "{";
+   json+=StringFormat("\"last_entry_server_time\":%I64d,\"history_ready\":%s,",(long)MathMax(0,latest),RIRI_HistoryReady?"true":"false");
+   json+=StringFormat("\"account_currency\":\"%s\",",AccountInfoString(ACCOUNT_CURRENCY));
+   json+=StringFormat("\"tick_age_seconds\":%I64d,",quote?(long)MathMax(0,(long)TimeTradeServer()-(long)tick.time):99999);
+   json+=StringFormat("\"broker_session\":{\"valid\":%s,\"close_time\":%I64d,\"next_open_time\":%I64d,\"weekly\":%s},",
+      valid_session?"true":"false",close_time,next_open,weekly?"true":"false");
+   json+="\"pending_orders\":"+RIRI_PendingJson()+",";
+   json+="\"timeframes\":"+RIRI_MultiFrames()+",";
    json += StringFormat("\"symbol\":\"%s\",", _Symbol);
    json += StringFormat("\"timeframe\":\"%s\",", RIRI_TimeframeName());
    json += StringFormat("\"market_time\":%I64d,", (long)TimeGMT());

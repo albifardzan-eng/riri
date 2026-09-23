@@ -8,6 +8,7 @@ from config.trading_config import (
     MIN_CONFIDENCE, MIN_ENTRY_INTERVAL_SECONDS, MIN_SCORE,
 )
 from scoring.scoring_engine import ScoringEngine
+from services.exposure import exposure
 
 
 def riri_positions(market):
@@ -35,31 +36,43 @@ def eligible_actions(market, *, now: int | None = None,
     current = now if now is not None else int(datetime.now(timezone.utc).timestamp())
     score = ScoringEngine().calculate(market).score if initial_score is None else initial_score
     positions = riri_positions(market)
-    lot = sum(float(p.lot) for p in positions)
-    latest = max((int(p.open_time) for p in positions), default=0)
-    invalid_time = bool(positions) and (
+    portfolio = exposure(market)
+    lot = portfolio["gross_lot"]
+    latest = max([market.last_entry_server_time] + [int(p.open_time) for p in positions])
+    invalid_time = bool(positions or latest) and (
         market.server_time <= 0 or any(p.open_time <= 0 for p in positions)
         or latest > market.server_time
     )
     # Conservative age at snapshot time, not a synthetic UTC conversion. This
     # is independent of broker timezone, including UTC+2/UTC+3 servers.
-    age = market.server_time - latest if positions and not invalid_time else None
+    age = market.server_time - latest if latest and not invalid_time else None
     remaining = max(0, MIN_ENTRY_INTERVAL_SECONDS - age) if age is not None else 0
 
+    spread_cap = 150 if settings.EXPERIMENTAL_SPREAD else MAX_SPREAD
+    normal_spread = 60 if settings.EXPERIMENTAL_SPREAD else MAX_SPREAD
+    session = market.broker_session
+    to_close = session.close_time - market.server_time
+    preclose = settings.PRECLOSE_ENABLED and (not session.valid or
+        to_close <= (3600 if session.weekly else 1800))
     checks = (
         (market.executor_policy_version != ENTRY_POLICY_VERSION, "EXECUTOR_UPGRADE_REQUIRED"),
         (market.symbol != "XAUUSD", "SYMBOL_NOT_ALLOWED"),
         (current - market.market_time < 0 or current - market.market_time > settings.MAX_MARKET_AGE_SECONDS,
          "STALE_MARKET_DATA"),
         (not market.hedging_account, "HEDGING_ACCOUNT_REQUIRED"),
+        (not market.history_ready, "ENTRY_HISTORY_UNAVAILABLE"),
+        (market.account_currency != "USD", "USD_ACCOUNT_REQUIRED"),
+        (market.tick_age_seconds > 10, "STALE_TICK"),
+        (preclose, "PRECLOSE_ENTRY_BLOCKED"),
         (not market.trade_allowed, "TRADING_NOT_ALLOWED"),
         (score < MIN_SCORE, "SCORE_BELOW_THRESHOLD"),
         (invalid_time, "POSITION_TIME_INVALID"),
         (remaining > 0, "MIN_ENTRY_INTERVAL"),
         (market.free_margin <= 0, "INSUFFICIENT_FREE_MARGIN"),
-        (market.spread > MAX_SPREAD, "SPREAD_ABOVE_LIMIT"),
+        (market.spread > spread_cap or (market.spread > normal_spread and score <= 80), "SPREAD_ABOVE_LIMIT"),
+        (not portfolio["risk_allowed"], "PORTFOLIO_SL_RISK_LIMIT"),
         (market.atr < MIN_ATR, "ATR_BELOW_LIMIT"),
-        (len(positions) >= MAX_ACTIVE_TRADES, "MAX_ACTIVE_TRADES"),
+        (portfolio["slots"] >= MAX_ACTIVE_TRADES, "MAX_ACTIVE_TRADES"),
         (lot >= MAX_TOTAL_LOT - 1e-9, "MAX_TOTAL_LOT"),
     )
     common = [reason for blocked, reason in checks if blocked]
@@ -71,7 +84,11 @@ def eligible_actions(market, *, now: int | None = None,
         if any(p.type == action and p.profit < 0 for p in positions):
             needs.append("AVERAGING")
         exceptions[action] = needs
-        required[action] = EXCEPTION_THRESHOLD + 1 if needs else MIN_CONFIDENCE
+        required[action] = max(
+            EXCEPTION_THRESHOLD + 1 if needs else MIN_CONFIDENCE,
+            86 if settings.SMALL_EQUITY_STRICT and market.equity <= 500 else MIN_CONFIDENCE,
+            96 if market.spread > normal_spread else MIN_CONFIDENCE,
+        )
         blockers[action] = common + [f"{need}_REQUIRES_SCORE_ABOVE_80"
                                      for need in needs if score <= EXCEPTION_THRESHOLD]
         reasons[action] = blockers[action][0] if blockers[action] else "PASS"
@@ -79,6 +96,7 @@ def eligible_actions(market, *, now: int | None = None,
     allowed = tuple(action for action in ("BUY", "SELL") if not blockers[action])
     reason = "PASS" if allowed else common[0] if common else "POSITION_POLICY_BLOCKED"
     diagnostics = {
+        "exposure": portfolio,
         "initial_score": score,
         "cooldown_seconds": MIN_ENTRY_INTERVAL_SECONDS,
         "cooldown_remaining_seconds": None if invalid_time else remaining,
@@ -107,6 +125,10 @@ def entry_rejection(market, decision, *, initial_score: int) -> str | None:
     action = decision.decision
     if action not in gate.allowed_actions:
         return gate.action_reasons[action]
+    if settings.SMALL_EQUITY_STRICT and market.equity <= 500 and decision.confidence <= 85:
+        return "SMALL_EQUITY_REQUIRES_CONFIDENCE_ABOVE_85"
+    if settings.EXPERIMENTAL_SPREAD and market.spread > 60 and decision.confidence <= 95:
+        return "SPREAD_EXCEPTION_REQUIRES_CONFIDENCE_ABOVE_95"
     if decision.confidence < gate.required_confidence[action]:
         return "POSITION_EXCEPTION_REQUIRES_CONFIDENCE_ABOVE_80"
     return None

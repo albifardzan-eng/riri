@@ -40,9 +40,7 @@ class DecisionDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             ("SELL", 70, ("SELL", 70, "COMPLETED", "AI_DIRECTION_SELECTED")),
         ]:
             with self.subTest(direction=direction):
-                result = await self.decide(NS(status="completed", output_text=json.dumps({
-                    "decision": direction, "confidence": confidence,
-                })))
+                result = await self.decide(NS(status="completed", output_text=json.dumps(fixtures.ai_payload(direction, confidence))))
                 self.assertEqual((result.decision, result.confidence, result.status, result.reason), expected)
 
     async def test_incomplete_captures_usage_but_never_partial_direction(self):
