@@ -131,6 +131,10 @@ class MarketData(BaseModel):
     digits: int = Field(ge=0, le=10)
     tick_size: float = Field(gt=0)
     tick_value: float = Field(ge=0)
+    volume_min: float = Field(default=0, ge=0)
+    volume_max: float = Field(default=0, ge=0)
+    volume_step: float = Field(default=0, ge=0)
+    stops_level_points: int = Field(default=0, ge=0)
     balance: float = Field(ge=0)
     equity: float = Field(ge=0)
     free_margin: float

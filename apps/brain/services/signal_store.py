@@ -21,6 +21,8 @@ class SignalStore:
         with self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             entry_state.initialize(db)
+            from services.capital_plans import initialize
+            initialize(db)
             db.execute(
                 """CREATE TABLE IF NOT EXISTS pending_signals (
                     identity_key TEXT PRIMARY KEY,
@@ -162,6 +164,10 @@ class SignalStore:
             if outcome == "EXECUTED" and entry_server_time <= 0:
                 db.commit()
                 return None
+            if outcome == "EXECUTED" and signal.get("ai_capital_profile") and signal.get("protection_plan"):
+                account_key = json.dumps([signal["terminal_id"],signal["account_id"],signal["symbol"],signal["magic_number"]],separators=(",",":"))
+                db.execute("INSERT OR REPLACE INTO capital_plans VALUES(?,?,?,?,?)",
+                    (account_key,signal_id,entry_server_time,signal["action"],json.dumps(signal["protection_plan"])))
             db.execute("UPDATE account_entry_state SET last_fill=MAX(last_fill,?),reservation=NULL,delivered=NULL WHERE reservation=?",
                        (entry_server_time if outcome == "EXECUTED" else 0, signal_id))
             db.execute(

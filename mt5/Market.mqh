@@ -79,7 +79,7 @@ string BuildPositionsJson()
       string type = position_type == POSITION_TYPE_BUY ? "BUY" : "SELL";
       json += StringFormat(
          "{\"ticket\":%I64u,\"symbol\":\"%s\",\"type\":\"%s\","
-         "\"lot\":%.2f,\"profit\":%.2f,\"open_time\":%I64d,"
+         "\"lot\":%.8f,\"profit\":%.2f,\"open_time\":%I64d,"
          "\"open_price\":%.5f,\"sl\":%.5f,\"tp\":%.5f,\"magic_number\":%I64d}",
          ticket, _Symbol, type,
          PositionGetDouble(POSITION_VOLUME), PositionGetDouble(POSITION_PROFIT),
@@ -130,7 +130,7 @@ string RIRI_PendingJson()
       ulong ticket=OrderGetTicket(i);
       if(ticket==0 || !RIRI_SelectedOrder()) continue;
       if(!first) json+=",";first=false;
-      json+=StringFormat("{\"ticket\":%I64u,\"symbol\":\"%s\",\"type\":\"%s\",\"lot\":%.2f,\"open_price\":%.5f,\"sl\":%.5f,\"magic_number\":%I64d}",
+      json+=StringFormat("{\"ticket\":%I64u,\"symbol\":\"%s\",\"type\":\"%s\",\"lot\":%.8f,\"open_price\":%.5f,\"sl\":%.5f,\"magic_number\":%I64d}",
          ticket,_Symbol,RIRI_IsBuyOrder(OrderGetInteger(ORDER_TYPE))?"BUY":"SELL",
          OrderGetDouble(ORDER_VOLUME_CURRENT),OrderGetDouble(ORDER_PRICE_OPEN),OrderGetDouble(ORDER_SL),MAGIC_NUMBER);
    }
@@ -166,7 +166,7 @@ string BuildMarketJson()
    // POSITION_TIME is a broker-clock value, not UTC. Send its clock alongside
    // it so the backend computes an interval without a timezone mismatch.
    json += StringFormat("\"server_time\":%I64d,", (long)TimeCurrent());
-   json += StringFormat("\"executor_policy_version\":%d,", RIRI_ENTRY_POLICY_VERSION);
+   json += StringFormat("\"executor_policy_version\":%d,", RIRI_AI_CAPITAL_PROFILE?4:RIRI_ENTRY_POLICY_VERSION);
    bool trade_allowed = TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) &&
       MQLInfoInteger(MQL_TRADE_ALLOWED) && AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) &&
       AccountInfoInteger(ACCOUNT_TRADE_EXPERT);
@@ -179,6 +179,9 @@ string BuildMarketJson()
    json += StringFormat("\"bid\":%.5f,\"ask\":%.5f,\"spread\":%.1f,", bid, ask, spread);
    json += StringFormat("\"point\":%.10f,\"digits\":%d,", point, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
    json += StringFormat("\"tick_size\":%.10f,\"tick_value\":%.5f,", tick_size, tick_value);
+   json += StringFormat("\"volume_min\":%.8f,\"volume_max\":%.8f,\"volume_step\":%.8f,\"stops_level_points\":%d,",
+      SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN),SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX),
+      SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP),(int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL));
    json += StringFormat("\"balance\":%.2f,\"equity\":%.2f,\"free_margin\":%.2f,",
       AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN_FREE));

@@ -13,6 +13,14 @@ input double DEFAULT_SLIPPAGE = 10;
 input string EA_NAME = "RIRI Executor";
 input string EA_VERSION = "1.4.0-part1";
 
+// Opt-in profile must match backend AI_CAPITAL_PROFILE; policy handshake fails closed.
+input bool RIRI_AI_CAPITAL_PROFILE = false;
+input int RIRI_CAPITAL_MIN_SCORE = 85;
+input int RIRI_CAPITAL_MIN_CONFIDENCE = 90;
+input double RIRI_CAPITAL_RISK_PERCENT = 1.0;
+input double RIRI_CAPITAL_MIN_REWARD_RISK = 1.5;
+input int RIRI_CAPITAL_COST_BUFFER_POINTS = 30;
+
 input bool RIRI_SMALL_EQUITY_STRICT = true;
 input bool RIRI_EXPERIMENTAL_SPREAD = false;
 input bool RIRI_REVIEW_EXECUTE = false;

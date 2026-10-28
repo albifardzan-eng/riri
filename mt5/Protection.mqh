@@ -1,6 +1,8 @@
 #ifndef RIRI_PROTECTION_MQH
 #define RIRI_PROTECTION_MQH
 
+#include "CapitalProtection.mqh"
+
 bool RIRI_PortfolioRisk(double candidate_lot,string direction,double &risk)
 {
    risk=0;
@@ -71,6 +73,7 @@ bool RIRI_CloseTicket(ulong ticket,string reason)
 
 void RIRI_TrailTicket(ulong ticket)
 {
+   if(RIRI_AI_CAPITAL_PROFILE) {RIRI_CapitalTrail(ticket);return;}
    if(!RIRI_TRAILING_ENABLED || !PositionSelectByTicket(ticket) || !RIRI_SelectedPosition()) return;
    bool buy=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY;
    double entry=PositionGetDouble(POSITION_PRICE_OPEN),old=PositionGetDouble(POSITION_SL);
@@ -141,7 +144,10 @@ void RIRI_Protect()
 
 void RIRI_ReviewPositions()
 {
+   static ulong last_review=0;
+   if(RIRI_AI_CAPITAL_PROFILE && GetTickCount64()-last_review<60000) return;
    double lot=0;if(RIRI_PositionCount(lot)==0) return;
+   last_review=GetTickCount64();
    string response;
    if(HttpPost("/positions/review",BuildMarketJson(),response)!=200 || StringFind(response,"\"review\":null")>=0) return;
    ulong ticket=(ulong)RIRI_JsonNumber(response,"ticket");

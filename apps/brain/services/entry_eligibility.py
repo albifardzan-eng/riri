@@ -76,6 +76,24 @@ def eligible_actions(market, *, now: int | None = None,
         (lot >= MAX_TOTAL_LOT - 1e-9, "MAX_TOTAL_LOT"),
     )
     common = [reason for blocked, reason in checks if blocked]
+    if settings.AI_CAPITAL_PROFILE:
+        common = [r for r in common if r != "EXECUTOR_UPGRADE_REQUIRED"]
+        extra = [
+            (market.executor_policy_version != 4, "EXECUTOR_UPGRADE_REQUIRED"),
+            (score < settings.CAPITAL_MIN_SCORE, "HIGH_CONFIDENCE_SETUP_REQUIRED"),
+            (portfolio["slots"] > 0, "CAPITAL_SINGLE_POSITION"),
+            (market.spread > MAX_SPREAD, "SPREAD_ABOVE_LIMIT"),
+            (min(market.volume_min, market.volume_step, market.volume_max, market.tick_value) <= 0,
+             "BROKER_SIZING_UNAVAILABLE"),
+        ]
+        common += [reason for blocked, reason in extra if blocked]
+        if min(market.volume_min, market.tick_size, market.tick_value) > 0:
+            floor = max(market.stops_level_points + market.spread + 1,
+                        market.atr / market.point * .5, market.spread * 3,
+                        settings.CAPITAL_COST_BUFFER_POINTS)
+            minimum_loss = (floor + settings.CAPITAL_COST_BUFFER_POINTS) * market.point / market.tick_size * market.tick_value * market.volume_min
+            if minimum_loss > market.equity * settings.CAPITAL_RISK_PERCENT / 100:
+                common.append("MINIMUM_LOT_EXCEEDS_RISK_BUDGET")
     reasons, required, blockers, exceptions = {}, {}, {}, {}
     for action in ("BUY", "SELL"):
         needs = []
@@ -85,6 +103,7 @@ def eligible_actions(market, *, now: int | None = None,
             needs.append("AVERAGING")
         exceptions[action] = needs
         required[action] = max(
+            settings.CAPITAL_MIN_CONFIDENCE if settings.AI_CAPITAL_PROFILE else MIN_CONFIDENCE,
             EXCEPTION_THRESHOLD + 1 if needs else MIN_CONFIDENCE,
             86 if settings.SMALL_EQUITY_STRICT and market.equity <= 500 else MIN_CONFIDENCE,
             96 if market.spread > normal_spread else MIN_CONFIDENCE,
@@ -119,6 +138,14 @@ def entry_rejection(market, decision, *, initial_score: int) -> str | None:
     """Same policy enforced by risk and execution, not just by the AI prompt."""
     if decision is None or decision.decision not in {"BUY", "SELL"}:
         return "NO_SIGNAL"
+    if settings.AI_CAPITAL_PROFILE:
+        if decision.status != "COMPLETED" or decision.confidence < settings.CAPITAL_MIN_CONFIDENCE:
+            return "CAPITAL_HIGH_CONFIDENCE_REQUIRED"
+        from services.capital_policy import validate_plan
+        try:
+            validate_plan(market, decision.plan)
+        except ValueError as exc:
+            return str(exc)
     if decision.confidence < MIN_CONFIDENCE:
         return "CONFIDENCE_BELOW_60"
     gate = eligible_actions(market, initial_score=initial_score)

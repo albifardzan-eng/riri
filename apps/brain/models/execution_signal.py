@@ -10,8 +10,15 @@ class ExecutionSignal(BaseModel):
     symbol: Literal["XAUUSD"]
     action: Literal["BUY", "SELL"]
     lot: float = Field(gt=0, le=0.50)
-    tp_points: int
-    sl_points: int
+    tp_points: int = Field(gt=0)
+    sl_points: int = Field(gt=0)
+    protection_plan: dict | None = None
+    ai_capital_profile: bool = False
+    trailing_start_points: int = Field(default=0, ge=0)
+    trailing_distance_points: int = Field(default=0, ge=0)
+    trailing_step_points: int = Field(default=0, ge=0)
+    review_move_points: int = Field(default=0, ge=0)
+    cost_buffer_points: int = Field(default=0, ge=0)
     confidence: int = Field(ge=60, le=100)
     initial_score: int = Field(ge=70, le=100)
     entry_policy_version: int

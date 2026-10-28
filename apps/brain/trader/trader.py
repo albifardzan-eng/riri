@@ -92,6 +92,9 @@ class AITrader:
         required_confidence=None,
     ) -> TraderDecision:
 
+        if settings.AI_CAPITAL_PROFILE:
+            from services.capital_ai import decide
+            return await decide(self.client, market, statistics, fundamental, pattern, allowed_actions)
         started = time.monotonic()
         response = None
         evidence = {}

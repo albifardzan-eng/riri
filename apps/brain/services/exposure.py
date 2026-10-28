@@ -3,11 +3,11 @@ from config.settings import settings
 from config.trading_config import RIRI_MAGIC_NUMBER, SL_POINTS
 
 
-def exposure(market, candidate_lot=0.0):
+def exposure(market, candidate_lot=0.0, sl_points=SL_POINTS):
     positions = [p for p in market.positions if p.magic_number == RIRI_MAGIC_NUMBER]
     orders = [p for p in market.pending_orders if p.magic_number == RIRI_MAGIC_NUMBER]
     known = market.tick_value > 0 and market.tick_size > 0
-    risk = candidate_lot * SL_POINTS * market.point / market.tick_size * market.tick_value
+    risk = candidate_lot * sl_points * market.point / market.tick_size * market.tick_value
     for p in positions + orders:
         if p.sl <= 0:
             known = False
