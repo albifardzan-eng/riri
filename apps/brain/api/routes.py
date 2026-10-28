@@ -61,7 +61,7 @@ def assert_identity(data: MarketData, identity: MT5Identity) -> None:
 
 @router.get("/health")
 async def health():
-    return {"status": "healthy", "version": settings.APP_VERSION, "entry_policy_version": 3, "revision": BUILD_REVISION}
+    return {"status": "healthy", "version": settings.APP_VERSION, "entry_policy_version": 4 if settings.AI_CAPITAL_PROFILE else 3, "ai_capital_profile": settings.AI_CAPITAL_PROFILE, "revision": BUILD_REVISION}
 
 
 @router.get("/ready")

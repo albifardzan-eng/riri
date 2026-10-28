@@ -31,6 +31,7 @@ class TraderDecision(BaseModel):
 
     # Backend-generated diagnostics, never requested from the model or sent
     # as instructions to MT5. UNKNOWN preserves the meaning of legacy rows.
+    plan: dict | None = None
     rationale: str = ""
     scenarios: dict[str, str] = Field(default_factory=dict)
     prompt_version: str = ""

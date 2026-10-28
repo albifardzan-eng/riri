@@ -60,6 +60,9 @@ class PositionReview:
             return bucket,failures
 
     async def analyze(self, market, trader, statistics, fundamental, pattern):
+        if settings.AI_CAPITAL_PROFILE:
+            from services.capital_ai import review
+            return await review(trader.client, market, statistics, fundamental, pattern)
         now=int(time.time())
         if not settings.POSITION_REVIEW_ENABLED:
             return {"reviews":[], "reason":"DISABLED"}

@@ -9,6 +9,11 @@ struct RiriSignal
    string symbol;
    string action;
    double lot;
+   bool ai_capital_profile;
+   int trailing_start_points;
+   int trailing_distance_points;
+   int trailing_step_points;
+   int cost_buffer_points;
    int tp_points;
    int sl_points;
    int confidence;
@@ -193,6 +198,11 @@ bool GetSignal(RiriSignal &signal)
    signal.symbol = RIRI_JsonString(response, "symbol");
    signal.action = RIRI_JsonString(response, "action");
    signal.lot = RIRI_JsonNumber(response, "lot");
+   signal.ai_capital_profile=RIRI_JsonBool(response,"ai_capital_profile",false);
+   signal.trailing_start_points=(int)RIRI_JsonNumber(response,"trailing_start_points");
+   signal.trailing_distance_points=(int)RIRI_JsonNumber(response,"trailing_distance_points");
+   signal.trailing_step_points=(int)RIRI_JsonNumber(response,"trailing_step_points");
+   signal.cost_buffer_points=(int)RIRI_JsonNumber(response,"cost_buffer_points");
    signal.tp_points = (int)RIRI_JsonNumber(response, "tp_points");
    signal.sl_points = (int)RIRI_JsonNumber(response, "sl_points");
    signal.confidence = (int)RIRI_JsonNumber(response, "confidence");
@@ -223,8 +233,8 @@ bool ConfirmSignal(
 {
    string body = StringFormat(
       "{\"signal_id\":\"%s\",\"status\":\"%s\",\"action\":\"%s\","
-      "\"order_id\":%I64u,\"deal_id\":%I64u,\"requested_lot\":%.2f,"
-      "\"filled_lot\":%.2f,\"executed_price\":%.5f,\"retcode\":%u,\"reason\":\"%s\",\"entry_server_time\":%I64d,\"execution_token\":\"%s\"}",
+      "\"order_id\":%I64u,\"deal_id\":%I64u,\"requested_lot\":%.8f,"
+      "\"filled_lot\":%.8f,\"executed_price\":%.5f,\"retcode\":%u,\"reason\":\"%s\",\"entry_server_time\":%I64d,\"execution_token\":\"%s\"}",
       signal.signal_id, status, signal.action, order_id, deal_id,
       signal.lot, filled_lot, executed_price, retcode,
       FundamentalJsonSafeString(reason), status=="EXECUTED"?(long)TimeCurrent():0, signal.execution_token
@@ -265,7 +275,7 @@ bool ReportTradeClose(ulong deal_id)
    string body = StringFormat(
       "{\"status\":\"CLOSED\",\"deal_id\":%I64u,\"order_id\":%I64d,"
       "\"position_id\":%I64d,\"symbol\":\"%s\",\"side\":\"%s\","
-      "\"lot\":%.2f,\"price\":%.5f,\"profit\":%.2f,\"event_time\":%I64d}",
+      "\"lot\":%.8f,\"price\":%.5f,\"profit\":%.2f,\"event_time\":%I64d}",
       deal_id,
       HistoryDealGetInteger(deal_id, DEAL_ORDER),
       HistoryDealGetInteger(deal_id, DEAL_POSITION_ID),

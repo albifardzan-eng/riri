@@ -53,6 +53,19 @@ class Settings(BaseSettings):
     APP_NAME: str = "RIRI"
 
     APP_VERSION: str = "1.4.0-part1"
+    # Explicit opt-in: paired backend + executor rollout, demo validation first.
+    AI_CAPITAL_PROFILE: bool = False
+    CAPITAL_MIN_SCORE: int = Field(default=85, ge=81, le=100)
+    CAPITAL_MIN_CONFIDENCE: int = Field(default=90, ge=86, le=100)
+    CAPITAL_RISK_PERCENT: float = Field(default=1.0, gt=0, le=2)
+    CAPITAL_MIN_REWARD_RISK: float = Field(default=1.5, ge=1, le=5)
+    CAPITAL_COST_BUFFER_POINTS: int = Field(default=30, ge=1)
+    CAPITAL_AI_CALLS_PER_DAY: int = Field(default=24, ge=1, le=200)
+    CAPITAL_AI_TOKENS_PER_DAY: int = Field(default=120000, ge=4096)
+    CAPITAL_AI_OUTPUT_TOKENS: int = Field(default=1536, ge=512, le=4096)
+    CAPITAL_AI_MIN_SECONDS: int = Field(default=120, ge=60)
+    CAPITAL_REVIEW_MAX_SECONDS: int = Field(default=900, ge=120)
+
     # Unsettled parameters are opt-in; no invented portfolio-risk cap.
     SMALL_EQUITY_STRICT: bool = True
     EXPERIMENTAL_SPREAD: bool = False

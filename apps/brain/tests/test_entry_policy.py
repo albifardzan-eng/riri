@@ -305,7 +305,7 @@ class MT5ContractTests(unittest.TestCase):
         self.assertIn("return RIRI_ReconcileEntry();", trading)
         self.assertIn("signal.initial_score <= RIRI_EXCEPTION_THRESHOLD", trading)
         self.assertIn("signal.confidence <= RIRI_EXCEPTION_THRESHOLD", trading)
-        self.assertIn("signal.entry_policy_version != RIRI_ENTRY_POLICY_VERSION", trading)
+        self.assertIn("signal.entry_policy_version != (RIRI_AI_CAPITAL_PROFILE?4:RIRI_ENTRY_POLICY_VERSION)", trading)
         self.assertIn("TimeCurrent() - latest_open < RIRI_MIN_ENTRY_INTERVAL_SECONDS", trading)
         self.assertIn('server_time', market)
         self.assertIn('(long)TimeCurrent()', market)

@@ -3,6 +3,8 @@
 
 
 bool RIRI_RiskCapAllowed(double lot,string direction,double signal_cap);
+bool RIRI_CapitalSignalAllowed(const RiriSignal &signal,string &reason);
+void RIRI_SaveCapitalPlan(const RiriSignal &signal);
 
 bool RIRI_SelectedPosition()
 {
@@ -18,7 +20,7 @@ double NormalizeTradeLot(double lot)
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(minimum <= 0 || maximum <= 0 || step <= 0 || lot < minimum || lot > maximum)
       return 0.0;
-   double normalized = NormalizeDouble(MathFloor((lot + 1e-9) / step) * step, 2);
+   double normalized = NormalizeDouble(MathFloor((lot + 1e-9) / step) * step, 8);
    // Never silently increase or change the backend-approved size.
    return MathAbs(normalized - lot) <= 1e-8 ? normalized : 0.0;
 }
@@ -79,7 +81,8 @@ bool RIRI_PositionPolicy(const RiriSignal &signal, string &reason)
 
 bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
 {
-   if(signal.entry_policy_version != RIRI_ENTRY_POLICY_VERSION || signal.magic_number != MAGIC_NUMBER)
+   if(signal.ai_capital_profile != RIRI_AI_CAPITAL_PROFILE ||
+      signal.entry_policy_version != (RIRI_AI_CAPITAL_PROFILE?4:RIRI_ENTRY_POLICY_VERSION) || signal.magic_number != MAGIC_NUMBER)
    {
       reason = "ENTRY_POLICY_MISMATCH";
       return false;
@@ -109,11 +112,13 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
       reason = "CONFIDENCE_BELOW_60";
       return false;
    }
-   if(signal.tp_points != RIRI_TP_POINTS || signal.sl_points != RIRI_SL_POINTS)
+   if(!RIRI_AI_CAPITAL_PROFILE && (signal.tp_points != RIRI_TP_POINTS || signal.sl_points != RIRI_SL_POINTS))
    {
       reason = "PROTECTION_RULE_MISMATCH";
       return false;
    }
+
+   if(RIRI_AI_CAPITAL_PROFILE && !RIRI_CapitalSignalAllowed(signal,reason)) return false;
 
    long now = (long)TimeGMT();
    if(signal.market_time <= 0 || now < signal.market_time || now - signal.market_time > 60 ||
@@ -159,7 +164,7 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
    double active_lot = 0.0, pending_lot=0;
    int active = RIRI_PositionCount(active_lot)+RIRI_PendingCount(pending_lot);
    active_lot+=pending_lot;
-   if(active >= RIRI_MAX_ACTIVE_TRADES)
+   if(active >= (RIRI_AI_CAPITAL_PROFILE?1:RIRI_MAX_ACTIVE_TRADES))
    {
       reason = "MAX_ACTIVE_TRADES";
       return false;
@@ -190,7 +195,7 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
    double remaining_lot = MathMax(0.0, RIRI_MAX_TOTAL_LOT - active_lot);
    remaining_lot = MathFloor((remaining_lot + 1e-9) * 100.0) / 100.0;
    policy_lot = MathMin(policy_lot, remaining_lot);
-   if(signal.lot > policy_lot + 1e-8)
+   if(!RIRI_AI_CAPITAL_PROFILE && signal.lot > policy_lot + 1e-8)
    {
       reason = "LOT_POLICY_EXCEEDED";
       return false;
@@ -207,7 +212,7 @@ bool RIRI_ValidateSignal(const RiriSignal &signal, double &lot, string &reason)
       reason = "MAX_TOTAL_LOT";
       return false;
    }
-   if(!RIRI_RiskCapAllowed(lot,signal.action,signal.max_sl_risk_percent)) {reason="PORTFOLIO_SL_RISK_LIMIT";return false;}
+   if(!RIRI_AI_CAPITAL_PROFILE && !RIRI_RiskCapAllowed(lot,signal.action,signal.max_sl_risk_percent)) {reason="PORTFOLIO_SL_RISK_LIMIT";return false;}
    return true;
 }
 
@@ -232,6 +237,7 @@ bool RIRI_SendOrder(const RiriSignal &signal, double lot)
    ZeroMemory(result);
    ZeroMemory(check);
 
+   bool buy=signal.action=="BUY";
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double price = signal.action == "BUY"
       ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
@@ -253,17 +259,24 @@ bool RIRI_SendOrder(const RiriSignal &signal, double lot)
    request.comment = EA_NAME;
    request.sl = NormalizeDouble(
       signal.action == "BUY"
-         ? price - RIRI_SL_POINTS * point
-         : price + RIRI_SL_POINTS * point,
+         ? price - signal.sl_points * point
+         : price + signal.sl_points * point,
       _Digits
    );
    request.tp = NormalizeDouble(
       signal.action == "BUY"
-         ? price + RIRI_TP_POINTS * point
-         : price - RIRI_TP_POINTS * point,
+         ? price + signal.tp_points * point
+         : price - signal.tp_points * point,
       _Digits
    );
 
+   if(RIRI_AI_CAPITAL_PROFILE)
+   {
+      double size=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+      if(size<=0) return false;
+      request.sl=NormalizeDouble((buy?MathCeil(request.sl/size):MathFloor(request.sl/size))*size,_Digits);
+      request.tp=NormalizeDouble((buy?MathCeil(request.tp/size):MathFloor(request.tp/size))*size,_Digits);
+   }
    int stops = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    if(MathAbs(price - request.sl) < stops * point || MathAbs(price - request.tp) < stops * point)
    {
@@ -279,6 +292,7 @@ bool RIRI_SendOrder(const RiriSignal &signal, double lot)
 
    // Permit is consumed once globally; ambiguity must never result in resubmission.
    if(!ConfirmSignal(signal,"UNKNOWN",0,0,0,0,0,"BROKER_OUTCOME_UNKNOWN")) return false;
+   if(RIRI_AI_CAPITAL_PROFILE) RIRI_SaveCapitalPlan(signal);
    bool sent = OrderSend(request, result);
    bool filled = sent && (result.retcode == TRADE_RETCODE_DONE ||
       result.retcode == TRADE_RETCODE_DONE_PARTIAL);
